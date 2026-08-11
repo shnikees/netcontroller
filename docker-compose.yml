@@ -1,0 +1,37 @@
+# docker compose up   /   podman-compose up
+#
+# Only the STT/dashboard app runs here. SDR++/GQRX stays on the host, feeding a
+# loopback sink that this container reads. See the README for creating the sink.
+#
+# UID must match the host user that owns the Pulse socket, or the bind mount
+# will not be readable:  UID=$(id -u) docker compose up
+
+services:
+  net-stt:
+    build:
+      context: .
+      dockerfile: Containerfile
+      args:
+        # tiny or base on a Pi 4; small is workable on a Pi 5.
+        MODEL_SIZE: ${MODEL_SIZE:-base}
+        UID: ${UID:-1000}
+    ports:
+      - "8080:8080"
+    environment:
+      # Name of the host monitor source that SDR++/GQRX feeds.
+      # `pactl list sources short` on the host to find it.
+      NETSTT_AUDIO_DEVICE: ${AUDIO_DEVICE:-net_sink.monitor}
+      NETSTT_WHISPER_MODEL_SIZE: ${MODEL_SIZE:-base}
+      NETSTT_WHISPER_DEVICE: cpu
+      NETSTT_ROSTER_PATH: /app/roster.csv
+      NETSTT_EXPORT_DIR: /app/logs
+      PULSE_SERVER: unix:/run/user/${UID:-1000}/pulse/native
+    volumes:
+      # The host's PulseAudio/PipeWire socket. Matching UIDs is what makes the
+      # permissions line up -- this is the step that usually goes wrong.
+      - ${XDG_RUNTIME_DIR}/pulse:/run/user/${UID:-1000}/pulse:ro
+      - ./roster.csv:/app/roster.csv:ro
+      # Optional: drop a config.yaml next to this file to override defaults.
+      # - ./config.yaml:/app/config.yaml:ro
+      - ./logs:/app/logs
+    restart: unless-stopped

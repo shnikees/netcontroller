@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Net Control — Live Transcript</title>
+<style>
+  :root {
+    --bg: #12151a;
+    --panel: #1b202a;
+    --line: #2c3340;
+    --text: #e8ecf3;
+    --muted: #8d97a8;
+    --matched: #7fd1a0;
+    --unmatched: #f0b45f;
+    --accent: #6fb3ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+    font-size: 20px;
+  }
+  header {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    padding: 0.75rem 1.25rem;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 1.15rem; margin: 0; letter-spacing: 0.02em; }
+  .status { display: flex; align-items: center; gap: 0.4rem; color: var(--muted); font-size: 0.85rem; }
+  .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--unmatched); }
+  .dot.live { background: var(--matched); }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; font-size: 0.85rem;
+    background: #2a3140; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 0.4rem 0.8rem; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.active { background: var(--accent); color: #0d1017; border-color: var(--accent); }
+  .layout { display: flex; align-items: flex-start; }
+  aside {
+    width: 15rem; flex: none; padding: 1rem;
+    border-right: 1px solid var(--line);
+    position: sticky; top: 3.75rem; max-height: calc(100vh - 3.75rem); overflow-y: auto;
+  }
+  aside h2 { font-size: 0.8rem; text-transform: uppercase; color: var(--muted); margin: 0 0 0.6rem; letter-spacing: 0.08em; }
+  .roster-item {
+    display: flex; justify-content: space-between; gap: 0.5rem;
+    padding: 0.35rem 0.5rem; border-radius: 6px; cursor: pointer;
+    font-size: 0.95rem; color: var(--muted);
+  }
+  .roster-item:hover { background: #232a36; }
+  /* Stations that have not checked in yet stay muted, so the ones that have
+     read as a check-in list at a glance. */
+  .roster-item .call { color: var(--muted); font-weight: 600; }
+  .roster-item.checked-in { color: var(--text); }
+  .roster-item.checked-in .call { color: var(--matched); font-weight: 700; }
+  .roster-item.selected { background: #2f3a4d; color: var(--text); }
+  .roster-item .count { color: var(--muted); font-size: 0.8rem; }
+  .roster-item .name { font-size: 0.85rem; color: var(--muted); }
+  main { flex: 1; min-width: 0; padding: 0 1rem 4rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    position: sticky; top: 3.75rem; z-index: 1;
+    text-align: left; font-size: 0.75rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--muted);
+    background: var(--bg); padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.dim { opacity: 0.25; }
+  .time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 0.9rem; }
+  .call { font-weight: 700; color: var(--matched); white-space: nowrap; }
+  .call .name { display: block; font-weight: 400; font-size: 0.8rem; color: var(--muted); }
+  .unmatched .call { color: var(--unmatched); font-weight: 600; }
+  .unmatched td { background: rgba(240, 180, 95, 0.07); }
+  .reason { display: block; font-size: 0.75rem; color: var(--muted); font-weight: 400; }
+  .text { line-height: 1.35; }
+  .conf { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 0.85rem; color: var(--muted); }
+  .bar { display: inline-block; width: 3.5rem; height: 0.45rem; border-radius: 3px; background: #2c3340; margin-right: 0.4rem; vertical-align: middle; }
+  .bar > span { display: block; height: 100%; border-radius: 3px; background: var(--matched); }
+  .bar.low > span { background: var(--unmatched); }
+  .empty { color: var(--muted); padding: 2rem 0.5rem; }
+  tr.new { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: rgba(111, 179, 255, 0.18); } to { background: transparent; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Net Control — Live Transcript</h1>
+  <div class="status"><span class="dot" id="dot"></span><span id="conn">connecting…</span></div>
+  <div class="status"><span id="stats">0 transmissions · 0 stations</span></div>
+  <div class="spacer"></div>
+  <button id="scrollBtn" class="active">Auto-scroll: on</button>
+  <button id="clearFilter" hidden>Clear filter</button>
+  <button id="exportBtn">Export log</button>
+</header>
+<div class="layout">
+  <aside>
+    <h2>Roster</h2>
+    <div id="roster"></div>
+  </aside>
+  <main>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 7rem">Time</th>
+          <th style="width: 10rem">Callsign</th>
+          <th>Transcript</th>
+          <th style="width: 7rem">Conf</th>
+        </tr>
+      </thead>
+      <tbody id="log"></tbody>
+    </table>
+    <div class="empty" id="empty">Waiting for the first transmission…</div>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

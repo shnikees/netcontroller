@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+config.yaml
+roster.csv
+net-log-*.csv
+net-log-*.txt
+net-log-*.json
+*.wav
+.pytest_cache/

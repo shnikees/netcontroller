@@ -1,0 +1,246 @@
+"""Tests for the normalizer and roster matcher.
+
+The strings here are written the way faster-whisper actually emits net traffic:
+inconsistent capitalization, phonetics run together, digits sometimes spelled
+and sometimes not, filler wrapped around the callsign.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from callsign_match import (
+    CallsignMatcher,
+    RosterEntry,
+    extract_candidates,
+    load_roster,
+    normalize,
+)
+
+ROSTER = [
+    RosterEntry("W6ABC", "Alice"),
+    RosterEntry("K7XYZ", "Bob"),
+    RosterEntry("N5DEF", "Carol"),
+    RosterEntry("KD9MNO", "Dave"),
+    RosterEntry("AA4PQ", "Erin"),
+]
+
+
+@pytest.fixture
+def matcher() -> CallsignMatcher:
+    return CallsignMatcher(roster=ROSTER)
+
+
+# --------------------------------------------------------------------------
+# normalize()
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("Whiskey Six Alpha Bravo Charlie", "W6ABC"),
+        ("whisky six alfa bravo charlie", "W6ABC"),
+        ("This is Whiskey 6 Alpha Bravo Charlie", "W6ABC"),
+        ("Kilo Seven X-ray Yankee Zulu, over.", "K7XYZ"),
+        ("November five delta echo foxtrot for net control", "N5DEF"),
+        ("kilo delta niner mike november oscar", "KD9MNO"),
+    ],
+)
+def test_normalize_spoken_callsigns(raw: str, expected: str) -> None:
+    assert normalize(raw) == expected
+
+
+def test_normalize_splits_glued_phonetics() -> None:
+    # Whisper regularly runs phonetics together with no space.
+    assert normalize("whiskey six alfabravo charlie") == "W6ABC"
+
+
+def test_normalize_keeps_unknown_words() -> None:
+    # Non-vocabulary words survive so they can be shown in the transcript and
+    # so a callsign spoken normally ("W6ABC") is still findable.
+    assert "WEATHER" in normalize("W6ABC weather is clear")
+
+
+def test_normalize_drops_filler() -> None:
+    normalized = normalize("this is net control, go ahead")
+    assert normalized == ""
+
+
+def test_ambiguous_homophones_only_convert_next_to_spelling() -> None:
+    # "for" as a preposition must not become a 4...
+    assert "4" not in normalize("standing by for traffic")
+    # ...but "alpha for bravo" is someone spelling A-4-B.
+    assert normalize("alpha for bravo") == "A4B"
+
+
+# --------------------------------------------------------------------------
+# extract_candidates()
+# --------------------------------------------------------------------------
+
+
+def test_extract_candidates_finds_callsign_shape() -> None:
+    assert extract_candidates("W6ABC WEATHER IS CLEAR") == ["W6ABC"]
+
+
+def test_extract_candidates_empty_on_plain_speech() -> None:
+    assert extract_candidates("NOTHING HEARD HERE") == []
+
+
+def test_extract_candidates_orders_strict_before_loose() -> None:
+    candidates = extract_candidates("KD9MNOP W6ABC")
+    assert candidates[0] == "W6ABC"
+    assert "KD9MNOP" in candidates
+
+
+# --------------------------------------------------------------------------
+# CallsignMatcher.match()
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("Whiskey six alpha bravo charlie, checking in", "W6ABC"),
+        ("this is kilo seven xray yankee zulu for check in", "K7XYZ"),
+        ("November Five Delta Echo Foxtrot, no traffic", "N5DEF"),
+        ("Kilo delta niner Mike November Oscar, QNI", "KD9MNO"),
+        ("alpha alpha four papa quebec", "AA4PQ"),
+    ],
+)
+def test_match_clean_transmissions(
+    matcher: CallsignMatcher, raw: str, expected: str
+) -> None:
+    result = matcher.match(raw)
+    assert result.matched
+    assert result.callsign == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # One mis-heard suffix letter -- still unambiguously one roster entry.
+        ("whiskey six alpha bravo charlie", "W6ABC"),
+        ("whiskey six alpha bravo delta", "W6ABC"),
+        ("kilo seven x-ray yankee zoo loo", "K7XYZ"),
+        # Digit heard as its neighbour: 5 <-> 9 is a classic Whisper confusion.
+        ("november nine delta echo foxtrot", "N5DEF"),
+    ],
+)
+def test_match_tolerates_single_character_errors(
+    matcher: CallsignMatcher, raw: str, expected: str
+) -> None:
+    result = matcher.match(raw)
+    assert result.matched, f"{raw!r} rejected: {result.reason} (score {result.score})"
+    assert result.callsign == expected
+
+
+def test_match_returns_operator_name(matcher: CallsignMatcher) -> None:
+    assert matcher.match("whiskey six alpha bravo charlie").name == "Alice"
+
+
+def test_unmatched_on_garbage(matcher: CallsignMatcher) -> None:
+    result = matcher.match("uh, static, unreadable, say again")
+    assert not result.matched
+    assert result.reason == "no_candidate"
+
+
+def test_unmatched_on_off_roster_callsign(matcher: CallsignMatcher) -> None:
+    result = matcher.match("victor echo three zulu quebec romeo checking in")
+    assert not result.matched
+    assert result.reason == "below_threshold"
+    # The candidate is still surfaced so net control can resolve it by ear.
+    assert result.candidate == "VE3ZQR"
+
+
+def test_unmatched_when_two_roster_entries_are_equally_close() -> None:
+    # W6ABD sits one edit from both W6ABC and W6ABE -- refuse to guess.
+    matcher = CallsignMatcher(
+        roster=[RosterEntry("W6ABC", "Alice"), RosterEntry("W6ABE", "Eve")]
+    )
+    result = matcher.match("whiskey six alpha bravo delta")
+    assert not result.matched
+    assert result.reason == "ambiguous"
+
+
+def test_exact_hit_beats_ambiguity_margin() -> None:
+    # An exact match must not be rejected just because a neighbour scores close.
+    matcher = CallsignMatcher(
+        roster=[RosterEntry("W6ABC", "Alice"), RosterEntry("W6ABD", "Dan")]
+    )
+    result = matcher.match("whiskey six alpha bravo charlie")
+    assert result.matched
+    assert result.callsign == "W6ABC"
+
+
+def test_empty_transmission_is_unmatched(matcher: CallsignMatcher) -> None:
+    assert not matcher.match("").matched
+
+
+def test_match_picks_callsign_from_longer_transmission(
+    matcher: CallsignMatcher,
+) -> None:
+    raw = (
+        "Good evening net control, this is whiskey six alpha bravo charlie, "
+        "Alice in Sacramento, no traffic tonight, back to you."
+    )
+    result = matcher.match(raw)
+    assert result.matched
+    assert result.callsign == "W6ABC"
+
+
+# --------------------------------------------------------------------------
+# Regressions from real transcripts
+#
+# These strings are verbatim faster-whisper output from replaying recorded
+# check-ins through the pipeline. Add to this block whenever a real net turns
+# up a new way for the model to mangle a callsign.
+# --------------------------------------------------------------------------
+
+
+def test_whisper_renders_spoken_digit_as_an_ordinal(matcher: CallsignMatcher) -> None:
+    raw = "november fifth delta echo foxtrot, good evening, nothing for the net."
+    result = matcher.match(raw)
+    assert result.matched
+    assert result.callsign == "N5DEF"
+
+
+def test_ordinals_stay_ordinals_outside_a_callsign(matcher: CallsignMatcher) -> None:
+    # "net meets the first Tuesday" must not turn into a 1.
+    assert "1" not in normalize("the net meets the first tuesday of the month")
+
+
+def test_mangled_quebec_still_yields_a_full_candidate(
+    matcher: CallsignMatcher,
+) -> None:
+    raw = "Victor echo three zulu quibbic Romeo, visiting station."
+    result = matcher.match(raw)
+    # Off-roster, so it stays unmatched -- but net control should see the whole
+    # callsign it heard, not a truncated one.
+    assert not result.matched
+    assert result.candidate == "VE3ZQR"
+
+
+# --------------------------------------------------------------------------
+# Roster loading + hotwords
+# --------------------------------------------------------------------------
+
+
+def test_load_roster_with_header(tmp_path) -> None:
+    path = tmp_path / "roster.csv"
+    path.write_text("callsign,name\nW6ABC,Alice\nk7xyz,Bob\n", encoding="utf-8")
+    entries = load_roster(path)
+    assert entries == [RosterEntry("W6ABC", "Alice"), RosterEntry("K7XYZ", "Bob")]
+
+
+def test_load_roster_without_names(tmp_path) -> None:
+    path = tmp_path / "roster.csv"
+    path.write_text("W6ABC\nN5DEF\n", encoding="utf-8")
+    assert [e.callsign for e in load_roster(path)] == ["W6ABC", "N5DEF"]
+
+
+def test_hotwords_include_spoken_and_written_forms(matcher: CallsignMatcher) -> None:
+    prompt = matcher.hotwords(extra_vocabulary=["QNI"])
+    assert "W6ABC" in prompt
+    assert "whiskey six alpha bravo charlie" in prompt
+    assert "QNI" in prompt

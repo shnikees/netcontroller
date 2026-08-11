@@ -1,0 +1,67 @@
+# Copy to config.yaml and edit. Every key can also be set by an env var named
+# NETSTT_<SECTION>_<KEY>, e.g. NETSTT_WHISPER_MODEL_SIZE=small.
+
+audio:
+  # Substring of the input device name. Run `python app.py --list-devices` to
+  # see what the host offers. This should be the monitor source that SDR++ or
+  # GQRX feeds -- typically a null sink's `.monitor`.
+  # Leave null to use the system default input.
+  device: null
+  # VAD frame size in ms: 10, 20, or 30.
+  frame_ms: 30
+
+vad:
+  # webrtcvad 0-3. 3 is the most aggressive at rejecting non-speech, which
+  # suits a squelched receiver feed with hiss between transmissions.
+  aggressiveness: 3
+  # Trailing silence that ends a transmission. Keep this comfortably longer
+  # than the pauses inside a phonetically spelled callsign.
+  silence_ms: 800
+  # Drop anything shorter than this -- squelch tails, kerchunks, noise bursts.
+  min_clip_ms: 400
+  # Hard cap so a stuck transmitter cannot buffer forever.
+  max_clip_ms: 120000
+  # Audio kept from before the trigger, so clips do not start mid-syllable.
+  preroll_ms: 300
+  trigger_ratio: 0.7
+
+whisper:
+  # tiny | base | small | medium | large-v3
+  # base is the default: it keeps up on a laptop CPU during a live net.
+  # See the README table before moving up.
+  model_size: base
+  # cpu | cuda | auto (auto uses CUDA when ctranslate2 reports a device)
+  device: auto
+  # null picks int8 on CPU, float16 on CUDA.
+  compute_type: null
+  beam_size: 5
+  language: en
+  # Biases decoding toward net vocabulary. Roster callsigns are added
+  # automatically, in both written and phonetic form.
+  vocabulary:
+    - net control
+    - QNI
+    - QRZ
+    - QSL
+    - QTH
+    - check in
+    - traffic
+    - over
+    - roger
+
+roster:
+  path: roster.csv
+  # Minimum fuzzy score (0-100) to accept a match. 78 sits just under the 80
+  # that one wrong character in a five-character callsign scores, so a single
+  # Whisper slip still matches and two do not.
+  threshold: 78.0
+  # If the runner-up is within this many points, the entry is flagged
+  # unmatched rather than guessed at.
+  ambiguity_margin: 5.0
+
+server:
+  host: 0.0.0.0
+  port: 8080
+
+# Where session logs are written on exit and by the Export button.
+export_dir: .
