@@ -12,6 +12,17 @@ locally.
 SDR++ / GQRX ──▶ loopback sink ──▶ capture ──▶ VAD ──▶ Whisper ──▶ roster match ──▶ dashboard
 ```
 
+![The dashboard during a net: matched stations in green with operator names, an
+unmatched transmission flagged in amber showing the callsign that was heard, and
+a roster sidebar doubling as a check-in list](docs/images/dashboard.png)
+
+Matched stations show in green with the operator's name; the roster sidebar
+lights up as stations check in. The amber line is the interesting case — an
+off-roster visitor, flagged rather than force-matched to the nearest roster
+entry, with the callsign the app heard shown so net control can resolve it by
+ear. (Screenshot uses the example roster and synthesized audio from
+`tools/make_test_audio.py`.)
+
 ## Status
 
 Working end to end on recorded and synthesized audio. **The live SDR capture
