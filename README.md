@@ -12,6 +12,26 @@ locally.
 SDR++ / GQRX ──▶ loopback sink ──▶ capture ──▶ VAD ──▶ Whisper ──▶ roster match ──▶ dashboard
 ```
 
+## Status
+
+Working end to end on recorded and synthesized audio. **The live SDR capture
+path has not yet run against real hardware** — see
+[docs/FIELD-BRINGUP.md](docs/FIELD-BRINGUP.md) for the bring-up checklist and
+the list of specifically unverified pieces.
+
+Everything downstream of the audio device — segmentation, transcription,
+callsign matching, dashboard, export, container image — is tested and works.
+
+## Documentation
+
+- [docs/FIELD-BRINGUP.md](docs/FIELD-BRINGUP.md) — first-time setup against
+  real hardware, in order, with the failure modes at each step
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit, the
+  threading model, and why things are the way they are
+- [docs/TESTING.md](docs/TESTING.md) — test suites, generating test audio
+  without an SDR, and how to add a regression when a net surfaces a new
+  mis-transcription
+
 ## Quick start
 
 ```bash
@@ -46,6 +66,12 @@ net's actual callsigns without a live net waiting on you.
 
 ```bash
 python app.py --file recorded-net.wav --model tiny
+```
+
+No recording handy? Generate one — this needs no radio at all:
+
+```bash
+python tools/make_test_audio.py && python app.py --file test-net.wav --model tiny
 ```
 
 The WAV must be 16-bit PCM at 16 kHz (or a multiple: 48 kHz works). The
@@ -161,9 +187,13 @@ The page reconnects on its own if the app restarts.
 .venv/bin/python -m pytest
 ```
 
-`test_callsign_match.py` covers the normalizer and matcher, including real
-Whisper output. `test_vad_segmenter.py` drives the segmenter with scripted
-speech patterns to pin the clip boundaries.
+52 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+covers the normalizer and matcher, including verbatim Whisper output;
+`test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
+
+See [docs/TESTING.md](docs/TESTING.md) for the workflow when a net turns up a
+mis-transcription the matcher does not handle — it is a two-line change plus a
+test.
 
 ## Running in a container
 
