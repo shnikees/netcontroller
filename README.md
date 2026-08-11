@@ -221,6 +221,14 @@ the network.
   watch headroom during an actual net — it may be worth splitting them across
   two boxes.
 
+## License
+
+GPL-3.0. Copyright (C) 2026 Michelle Michaels. See [LICENSE](LICENSE).
+
+The same license as GQRX, GNU Radio, and fldigi, so this composes with the rest
+of the SDR stack it sits alongside. If you modify it and distribute your
+version, your changes have to be available under the GPL too.
+
 ## Limitations
 
 - Voice only (FM/SSB). No CW, no digital modes.
