@@ -1,10 +1,14 @@
 # Ham Radio Net Speech-to-Text
 
 Live transcription for an amateur radio net. Audio comes in from an SDR, a
-radio's line output, or a microphone; each
-transmission is transcribed, the speaker is matched against a roster of known
-callsigns, and everything lands in a browser dashboard that net control can
-read from across the table.
+radio's line output, or a microphone; each transmission is transcribed, the
+speaker is matched against a roster of known callsigns, and everything lands in
+a browser dashboard that net control can read from across the table.
+
+Built for a **high-traffic event or race net** — the kind run from a trailer
+with several people talking at once, where the question is *"what was that last
+transmission?"* and the answer has to be on screen rather than in somebody's
+memory. It works for an orderly weekly check-in too, but that is the easy case.
 
 Fully offline — no cloud services, nothing leaves the machine. Whisper runs
 locally.

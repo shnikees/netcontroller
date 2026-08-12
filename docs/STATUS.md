@@ -3,6 +3,33 @@
 Written honestly, because the interesting question about this app is not what
 it does — it is what has actually been *proven* to work.
 
+## What this is actually for
+
+A **high-traffic event or race net**, run from a trailer with several people
+talking at once, not an orderly weekly check-in. The job is *"oh shit, what was
+that last transmission"* — making sure nothing gets lost when three things
+happen simultaneously and the person who needed to hear one of them was
+talking to somebody else.
+
+That shifts what matters, and parts of this app were built assuming the other
+kind of net:
+
+- **The transcript is the product.** Callsign attribution is useful, but a
+  correct verbatim record of what was said is the thing being paid for. On a
+  check-in net it is the other way round.
+- **Everyone speaks repeatedly**, so ordering the prompt by "who has not
+  checked in yet" is the wrong prior for this use — attendance frequency and
+  recency are better ones.
+- **Voice identification matters more, not less.** Event traffic often carries
+  no callsign at all, and a trailer full of people is exactly where "who said
+  that" is hardest and most useful.
+- **Overlapping and back-to-back speech is the normal case**, not an edge case,
+  which puts the splitter and the VAD thresholds on the critical path rather
+  than at the margins.
+
+FCC callsign lookup is deliberately *not* on the list below: it is being
+handled in the rally deployment app instead.
+
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
@@ -84,7 +111,40 @@ Roughly in order of value per effort:
 
 1. **Run a net.** Everything above is downstream of this.
 
-2. **A better voice embedder.** The current one is log-mel cepstral statistics
+2. **Replay the audio behind a line.** Probably the single highest-value item
+   for a race net, and the most direct answer to "what was that last
+   transmission": click a line, hear the clip it came from. A transcript
+   answers the question most of the time; the audio answers it the rest of the
+   time, and settles arguments about what somebody actually said.
+
+   Most of the machinery exists — clips are already retained transiently for
+   voice enrolment and escalation. What is missing is keeping a rolling window
+   of recent clip audio addressed by entry id, and a play control on the row.
+   The clips kept for voice enrolment already prove the storage side works.
+
+3. **A traffic flag on each line.** There is no model of traffic at all today,
+   and a net exists partly to move it. The phrasing is stereotyped enough to
+   detect — "with traffic", "I have traffic for", against "no traffic" and
+   "nothing for the net" — which makes it cheap, with one real trap: the
+   negative forms are more common than the positive ones, so a detector that
+   ignores negation would flag the entire net.
+
+   Worth surfacing as a filter and a count, so "who still has traffic" is a
+   working list during the net rather than something reconstructed afterwards.
+   Borrowed from ham-net-tracker, which models this properly.
+
+4. **Expected stations from history.** The roster is hand-maintained; the
+   transcripts already record who actually turns up. Deriving attendance from
+   past sessions gives a better prior for prompt biasing than roster order —
+   on an event net, frequency and recency beat "not yet heard from" — and it
+   keeps itself current as the crew changes.
+
+   `calibrate.load_entries()` already reads every past session, so the data is
+   in hand. The trap is auto-adding unknown callsigns: a mis-transcription that
+   became a "station" would then bias decoding toward its own mistake, so
+   anything not on the roster stays a suggestion for a human.
+
+5. **A better voice embedder.** The current one is log-mel cepstral statistics
    in numpy — 24 numbers describing average timbre, never trained to tell one
    speaker from another. It also conflates the voice with the *channel*, so a
    profile is really "Frank on his HT" and breaks when he checks in mobile.
@@ -106,15 +166,15 @@ Roughly in order of value per effort:
    `tools/rebuild_voices.py --compare` scores both embedders on identical
    audio.
 
-3. **Benchmark alternatives to Whisper.** NVIDIA Parakeet is faster and scores
+6. **Benchmark alternatives to Whisper.** NVIDIA Parakeet is faster and scores
    better on English; Riva offers real *word boosting*, which is a proper
    answer to the 224-token prompt ceiling rather than a workaround. `stt_worker.py`
    is the only module that knows which engine is in use.
-4. **Make matching source-aware.** Per-frequency rosters currently bias
+7. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
    would cut wrong matches on a 100-station roster — carefully, since people do
    turn up on the other frequency.
-5. **Review after the net, not during it.** Everything self-supervised is in
+8. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards
