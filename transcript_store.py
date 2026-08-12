@@ -55,6 +55,10 @@ class TranscriptEntry:
     """Which receiver heard it, when more than one is configured."""
     escalated: bool = False
     """Re-transcribed by a larger model after the first pass was unsure."""
+    suggested_callsign: str | None = None
+    """Whose voice this sounds like. A suggestion for the operator, never an
+    assignment -- see voice_id.py."""
+    suggestion_score: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -127,6 +131,15 @@ class TranscriptStore:
         entry.operator_name = operator_name
         entry.corrected = True
         entry.unmatched_reason = ""
+        return entry
+
+    def suggest(self, entry_id: int, callsign: str, score: float) -> TranscriptEntry | None:
+        """Attach a voice suggestion to an unmatched line."""
+        entry = self.get(entry_id)
+        if entry is None or entry.matched or entry.corrected:
+            return None
+        entry.suggested_callsign = callsign
+        entry.suggestion_score = round(score, 3)
         return entry
 
     def improve(

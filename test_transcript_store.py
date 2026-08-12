@@ -82,3 +82,42 @@ def test_export_text_is_readable(store: TranscriptStore, tmp_path) -> None:
 def test_export_of_empty_session_still_writes(tmp_path) -> None:
     path = TranscriptStore().export_text(tmp_path / "log.txt")
     assert "0 transmissions" in path.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# Voice suggestions
+# --------------------------------------------------------------------------
+
+
+def test_a_suggestion_attaches_to_an_unmatched_line() -> None:
+    store = TranscriptStore()
+    entry = add(store, None, "back to you net control")
+    assert store.suggest(entry.id, "KJ6TUV", 0.88) is not None
+    assert entry.suggested_callsign == "KJ6TUV"
+    # Crucially, still unmatched: a suggestion is an offer, not an answer.
+    assert entry.matched is False
+    assert entry.matched_callsign is None
+
+
+def test_a_suggestion_never_touches_a_matched_line() -> None:
+    store = TranscriptStore()
+    entry = add(store, "W6ABC", "checking in")
+    assert store.suggest(entry.id, "KJ6TUV", 0.99) is None
+    assert entry.matched_callsign == "W6ABC"
+    assert entry.suggested_callsign is None
+
+
+def test_a_suggestion_never_overrides_an_operator() -> None:
+    store = TranscriptStore()
+    entry = add(store, None, "unreadable")
+    store.correct(entry.id, "W6ABC", "Alice")
+    assert store.suggest(entry.id, "KJ6TUV", 0.99) is None
+    assert entry.matched_callsign == "W6ABC"
+
+
+def test_a_suggested_station_is_not_counted_as_a_check_in() -> None:
+    # Until the operator confirms it, the station has not checked in.
+    store = TranscriptStore()
+    entry = add(store, None, "back to you")
+    store.suggest(entry.id, "KJ6TUV", 0.9)
+    assert store.check_ins() == []

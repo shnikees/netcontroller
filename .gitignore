@@ -12,3 +12,4 @@ net-log-*.json
 logs/
 spill/
 transcripts/
+voices.json

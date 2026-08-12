@@ -64,6 +64,7 @@ from session_writer import SessionWriter
 from stt_worker import SttWorker
 from transcript_store import TranscriptStore
 from vad_segmenter import VadSegmenter
+from voice_id import VoiceProfiles
 
 log = logging.getLogger("net-stt")
 
@@ -359,6 +360,17 @@ class Pipeline:
         self._prompts: dict[str, str] = {}
         self._prompt_generation = -1
 
+        # Voices, learned from clean matches and from operator corrections.
+        self.voices = VoiceProfiles(
+            path=config.voice.path,
+            min_similarity=config.voice.min_similarity,
+            margin=config.voice.margin,
+            min_enrolments=config.voice.min_enrolments,
+        )
+        # Recent clip audio, so a correction arriving a minute later can still
+        # enrol the voice it belongs to.
+        self._recent_audio: collections.OrderedDict = collections.OrderedDict()
+
         self.sources = [
             SourceCapture(
                 source=source,
@@ -379,6 +391,10 @@ class Pipeline:
 
     def start(self) -> None:
         self.stt.load()
+        if self.config.voice.enabled:
+            known = self.voices.load()
+            if known:
+                log.info("Loaded %d voice profile(s) from %s", known, self.config.voice.path)
         if self.config.buffering.spill_enabled:
             cleared = self.spill.clear()
             if cleared:
@@ -402,6 +418,13 @@ class Pipeline:
         # Sentinel must be comparable with the (priority, sequence, clip)
         # tuples in the queue, and must sort ahead of them so shutdown is not
         # stuck behind a backlog.
+        if self.config.voice.enabled and self.voices.profiles:
+            if self.voices.save():
+                log.info(
+                    "Saved %d voice profile(s) to %s",
+                    len(self.voices.profiles),
+                    self.config.voice.path,
+                )
         self._clips.put(STOP_SENTINEL)
         if self._stt_thread is not None:
             self._stt_thread.join(timeout=5)
@@ -485,6 +508,55 @@ class Pipeline:
             clip.duration_ms / 1000,
             path.name,
         )
+
+    # -- voices ------------------------------------------------------------
+
+    def _remember_audio(self, entry_id: int, audio) -> None:
+        if not self.config.voice.enabled or audio is None:
+            return
+        self._recent_audio[entry_id] = audio
+        while len(self._recent_audio) > self.config.voice.recent_audio:
+            self._recent_audio.popitem(last=False)
+
+    def _voice_pass(self, entry, audio) -> None:
+        """Learn from a clean match, or suggest a name for an unmatched line."""
+        if not self.config.voice.enabled or audio is None:
+            return
+
+        if entry.matched and entry.matched_callsign:
+            # Only learn from matches good enough to be trusted as labels; a
+            # profile built from a wrong match poisons every later suggestion.
+            if entry.match_score >= self.config.voice.enrol_min_score:
+                self.voices.enrol(entry.matched_callsign, audio)
+            return
+
+        suggestion = self.voices.identify(audio)
+        if suggestion is None:
+            return
+        self.store.suggest(entry.id, suggestion.callsign, suggestion.score)
+        log.info(
+            "Voice suggests %s for entry %d (%.2f, next best %s %.2f)",
+            suggestion.callsign,
+            entry.id,
+            suggestion.score,
+            suggestion.runner_up or "-",
+            suggestion.runner_up_score,
+        )
+
+    def enrol_from_correction(self, entry_id: int, callsign: str) -> bool:
+        """Learn a voice from a line the operator just fixed.
+
+        The best labels available: a human listened and said whose it was.
+        """
+        if not self.config.voice.enabled:
+            return False
+        audio = self._recent_audio.get(entry_id)
+        if audio is None:
+            return False
+        learned = self.voices.enrol(callsign, audio)
+        if learned:
+            log.info("Learned %s's voice from correction of entry %d", callsign, entry_id)
+        return learned
 
     def _maybe_escalate(self, entry, audio) -> None:
         """Queue a line for a second, better pass when the first was unsure."""
@@ -696,9 +768,12 @@ class Pipeline:
             late=late,
             source=clip.source if self.multi_source else "",
         )
+        audio = _segment_audio(clip, segment)
+        self._remember_audio(entry.id, audio)
+        self._voice_pass(entry, audio)
         if self.session is not None:
             self.session.append(entry)
-        self._maybe_escalate(entry, _segment_audio(clip, segment))
+        self._maybe_escalate(entry, audio)
         log.info(
             "%s |%s %s | %s%s",
             entry.timestamp,
@@ -845,6 +920,8 @@ async def run(config: Config, wav_path: str | None) -> None:
         wav_path,
         session=session,
     )
+    # The correction endpoint learns the voice as well as the alias.
+    app.state.enrol_voice = pipeline.enrol_from_correction
     pipeline.start()
     watch = asyncio.create_task(watchdog(config, fleet, broadcaster))
 

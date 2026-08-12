@@ -65,7 +65,7 @@ PHONETIC_MAP: dict[str, str] = {
     # J
     "juliet": "J", "juliett": "J", "julliet": "J", "juliette": "J",
     # K
-    "kilo": "K", "keelo": "K", "kilos": "K",
+    "kilo": "K", "keelo": "K", "kilos": "K", "kelo": "K", "killo": "K",
     # L
     "lima": "L", "leema": "L", "limo": "L",
     # M

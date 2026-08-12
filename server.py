@@ -152,6 +152,11 @@ def create_app(
         learned = False
         if matcher is not None:
             learned = matcher.learn_alias(candidate, callsign)
+
+        # A corrected line is the best possible voice label: a human listened
+        # and said whose it was.
+        enrol = getattr(app.state, "enrol_voice", None)
+        voice_learned = bool(enrol and enrol(payload.entry_id, callsign))
         log.info(
             "Correction: entry %d %s -> %s%s",
             payload.entry_id,
@@ -167,7 +172,12 @@ def create_app(
             {"type": "correction", "entry": entry.to_dict(), "learned": learned}
         )
         return JSONResponse(
-            {"entry": entry.to_dict(), "learned": learned, "alias": candidate}
+            {
+                "entry": entry.to_dict(),
+                "learned": learned,
+                "alias": candidate,
+                "voice_learned": voice_learned,
+            }
         )
 
     @app.get("/api/health")

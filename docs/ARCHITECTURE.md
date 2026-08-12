@@ -71,6 +71,7 @@ code. `app.py` wires everything together and owns the process lifecycle.
 | `callsign_match.py` | Normalizer + roster matcher — the domain logic |
 | `clip_split.py` | Splits a clip that caught two stations into separate lines |
 | `feedback.py` | Operator corrections, and the aliases learned from them |
+| `voice_id.py` | Voice profiles, and suggestions for unmatched lines |
 | `transcript_store.py` | Session log, ordering, CSV/text export |
 | `session_writer.py` | Streams the session to disk as it happens |
 | `health.py` | Per-source health, and the combined verdict |
@@ -164,6 +165,30 @@ one. That pass biases toward `matcher.nearest()`: the handful of roster entries
 the first pass was already close to, which is short enough to fit whatever the
 roster size. The result replaces the line only if it genuinely matched better,
 and never if an operator has already corrected it by hand.
+
+### `voice_id.py`
+
+The only part of the app that works on *who* spoke rather than *what* was said,
+and it exists for the one failure the rest cannot touch: a transmission with no
+usable callsign in it. No transcription improvement reaches that line; a voice
+does.
+
+Enrolment is free, because the labels are already being produced — a clean
+roster match, or a line an operator corrected, is a labelled (audio, callsign)
+pair. Profiles are a running mean per station, persisted between nets.
+
+**It only ever suggests, and only on unmatched lines.** The reasons are the
+same ones that make the matcher prefer "unmatched" to a guess: FM narrowband
+flattens speaker features, two operators share one radio, and a relay carries
+somebody else's voice. So a suggestion is offered for the operator to accept
+with the click that already exists, and `TranscriptStore.suggest` refuses a
+line that is matched or has been corrected.
+
+The embedding is log-mel cepstral statistics in numpy — mean and deviation
+pooled over the clip, which makes it independent of what was said. Weaker than
+a trained speaker network and chosen so the app still installs on a Pi without
+a deep-learning runtime; with a high threshold and suggestion-only output, the
+weakness costs recall rather than correctness.
 
 ### `clip_split.py`
 

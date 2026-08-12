@@ -143,6 +143,14 @@
   .tab .unread[hidden] { display: none; }
   tr.hidden-source { display: none; }
   #log.scoped .src-mark { display: none; }
+  .suggestion {
+    display: block; margin-top: 0.3rem;
+    font-size: 0.7rem; font-weight: 600; letter-spacing: 0.02em;
+    background: transparent; color: var(--accent);
+    border: 1px dashed var(--accent); border-radius: 999px;
+    padding: 0.1rem 0.5rem; cursor: pointer;
+  }
+  .suggestion:hover { background: var(--accent); color: #0d1017; border-style: solid; }
   .late-mark {
     display: block; font-size: 0.65rem; color: var(--unmatched);
     text-transform: uppercase; letter-spacing: 0.06em;

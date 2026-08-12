@@ -150,7 +150,14 @@ function callsignCellHTML(entry) {
     const why = entry.candidate
       ? `heard “${entry.candidate}”`
       : (entry.unmatched_reason || "").replace(/_/g, " ");
-    return `<span class="call-text">UNMATCHED</span><span class="reason">${why}</span>`;
+    // A voice suggestion is an offer, not an answer: one click accepts it and
+    // goes through the same correction path as any manual fix.
+    const suggestion = entry.suggested_callsign
+      ? `<button class="suggestion" data-callsign="${entry.suggested_callsign}"` +
+        ` title="Sounds like ${entry.suggested_callsign} (${Math.round(entry.suggestion_score * 100)}% voice match). Click to confirm.">` +
+        `sounds like ${entry.suggested_callsign}?</button>`
+      : "";
+    return `<span class="call-text">UNMATCHED</span><span class="reason">${why}</span>${suggestion}`;
   }
   const name = entry.operator_name ? `<span class="name">${entry.operator_name}</span>` : "";
   const mark = entry.corrected
@@ -183,6 +190,13 @@ function paintRow(row, entry) {
   // Transcript text is model output, so set it as text rather than markup.
   row.querySelector(".text").textContent = entry.raw_text;
   row.querySelector(".call").onclick = () => openCorrection(row, entry);
+  const suggestion = row.querySelector(".suggestion");
+  if (suggestion) {
+    suggestion.onclick = (event) => {
+      event.stopPropagation();  // do not open the picker as well
+      submitCorrection(entry.id, suggestion.dataset.callsign);
+    };
+  }
   const badge = row.querySelector(".src-mark");
   if (badge) {
     badge.onclick = (event) => {
@@ -272,11 +286,10 @@ async function submitCorrection(entryId, callsign) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "correction failed");
     applyCorrection(data.entry);
-    showToast(
-      data.learned
-        ? `${callsign} set — learned “${data.alias}”, future transmissions will match automatically`
-        : `${callsign} set`
-    );
+    const learned = [];
+    if (data.learned) learned.push(`learned “${data.alias}”`);
+    if (data.voice_learned) learned.push("learned this voice");
+    showToast(learned.length ? `${callsign} set — ${learned.join(", ")}` : `${callsign} set`);
   } catch (err) {
     showToast(`Could not save: ${err.message}`);
     const entry = findEntry(entryId);

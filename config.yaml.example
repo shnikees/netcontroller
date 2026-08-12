@@ -129,6 +129,33 @@ escalation:
   min_confidence: 0.55    # also retry matched lines below this
   max_pending: 50
 
+# Recognise a station by voice, for the case nothing else can reach: a
+# transmission with no usable callsign in it at all. Profiles are learned from
+# clean roster matches and from lines you correct by hand, and persist between
+# nets.
+#
+# Suggestions only, and only on unmatched lines -- a voice match never
+# overrides a callsign that was actually heard, and never fills one in
+# silently. The dashboard offers it; you confirm with one click.
+voice:
+  enabled: false
+  path: voices.json
+  # How close a voice must be before it is worth suggesting. This is the one
+  # number here that synthetic testing cannot set for you -- start high, and
+  # lower it only if real suggestions are not appearing.
+  min_similarity: 0.82
+  # The best match must beat the runner-up by this much, or say nothing. Two
+  # operators who sound alike should produce no suggestion, not a coin flip.
+  margin: 0.06
+  # Clips needed before a profile is trusted at all.
+  min_enrolments: 2
+  # Only learn a voice from a roster match this clean (0-100). A profile built
+  # from a wrong match poisons every later suggestion.
+  enrol_min_score: 95.0
+  # Clips kept in memory so a correction arriving a minute later can still
+  # enrol the voice it belongs to.
+  recent_audio: 60
+
 roster:
   path: roster.csv
   # Minimum fuzzy score (0-100) to accept a match. 78 sits just under the 80

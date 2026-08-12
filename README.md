@@ -295,6 +295,41 @@ callsigns nearest to what was actually heard, which is a short list that fits
 easily — so this scales to any roster size. An operator correction always wins;
 a re-run never overwrites a human.
 
+### Recognising a station by voice
+
+Everything above works on what was *said*. This works on *who said it*, for the
+case nothing else can reach: **a transmission with no usable callsign in it**.
+"Back to you, net control" stays unmatched no matter how good transcription
+gets — but it is still Frank's voice, and Frank checked in ten minutes ago.
+
+```yaml
+voice:
+  enabled: true
+```
+
+The training data is already being produced. Every clean roster match, and
+every line you correct by hand, is a labelled (audio, callsign) pair. Profiles
+persist in `voices.json`, so the system knows more voices every week without
+anyone doing anything extra.
+
+**Suggestions only, and only on unmatched lines.** An unmatched row shows
+`sounds like KJ6TUV?` — one click confirms it, through the same correction path
+as any manual fix, which also learns the alias *and* the voice. A voice match
+never overrides a callsign that was actually heard and never fills one in
+silently, because the failure modes are real: FM narrowband flattens the
+features that distinguish speakers, two operators share one radio, and a
+relayed transmission is somebody else's voice entirely.
+
+`min_similarity` (0.82) is the number to tune against your own net; it is the
+one thing no amount of synthetic testing can set correctly. Start high — a
+suggestion you have to think about is worse than no suggestion.
+
+The embedding is deliberately dependency-free (log-mel cepstral statistics in
+numpy), so it runs on a Pi without a deep-learning runtime. That is weaker than
+a trained speaker-embedding network, which is the honest trade for staying
+installable: it costs recall rather than correctness, since the threshold is
+high and the result is only ever a suggestion.
+
 ### When two stations land in one clip
 
 If stations key up inside `vad.silence_ms` of each other, the VAD hands both to
@@ -477,7 +512,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-209 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+229 tests, all offline, no audio hardware needed. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 

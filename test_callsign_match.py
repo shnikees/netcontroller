@@ -264,6 +264,14 @@ def test_a_digit_welded_to_a_phonetic_splits() -> None:
     assert normalize("victor echo 3zulu quebec romeo") == "VE3ZQR"
 
 
+def test_kilo_heard_as_kelo() -> None:
+    # Verbatim from a replay: "KELO 7XY, Yankee, Zulu, checking in with traffic."
+    matcher = CallsignMatcher(roster=ROSTER)
+    result = matcher.match("KELO 7XY, Yankee, Zulu, checking in with traffic.")
+    assert result.matched
+    assert result.callsign == "K7XYZ"
+
+
 def test_mangled_quebec_still_yields_a_full_candidate(
     matcher: CallsignMatcher,
 ) -> None:

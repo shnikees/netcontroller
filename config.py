@@ -172,6 +172,33 @@ class EscalationConfig:
 
 
 @dataclass
+class VoiceConfig:
+    """Recognising a station by voice, to help when the callsign is not usable.
+
+    Suggestions only, and only on lines the roster could not match. A voice
+    match never overrides a callsign that was actually heard.
+    """
+
+    enabled: bool = False
+    path: str = "voices.json"
+    """Profiles persist here, so next week's net starts knowing these voices."""
+    min_similarity: float = 0.82
+    """How close a voice must be before it is worth suggesting. Expect to tune
+    this against your own net: it is the one number here that no amount of
+    synthetic testing can set correctly."""
+    margin: float = 0.06
+    """The best match must beat the runner-up by this much, or say nothing."""
+    min_enrolments: int = 2
+    """Clips needed before a profile is trusted at all."""
+    enrol_min_score: float = 95.0
+    """Only learn a voice from a roster match this clean. A profile built from
+    a wrong match poisons every later suggestion."""
+    recent_audio: int = 60
+    """Clips kept in memory so an operator correction can enrol its audio --
+    corrections are the best labels there are."""
+
+
+@dataclass
 class RosterConfig:
     path: str = "roster.csv"
     threshold: float = 78.0
@@ -253,6 +280,7 @@ class Config:
     split: SplitConfig = field(default_factory=SplitConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     roster: RosterConfig = field(default_factory=RosterConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
@@ -299,6 +327,7 @@ _SECTIONS = {
     "split": SplitConfig,
     "whisper": WhisperConfig,
     "escalation": EscalationConfig,
+    "voice": VoiceConfig,
     "roster": RosterConfig,
     "server": ServerConfig,
     "health": HealthConfig,
