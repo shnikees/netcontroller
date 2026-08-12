@@ -11,6 +11,13 @@ Budget an hour, and do it on a day when there is *no* net you care about.
 
 Do these at home, they need no radio:
 
+> **If you plan to try a better voice embedder later**, decide *before* this
+> net whether to keep the audio behind each voice profile — see item 2 in
+> [STATUS.md](STATUS.md). Embeddings from different models are not comparable,
+> so without the audio, switching later means throwing away every profile and
+> starting enrolment over. It costs nothing to add now and cannot be added
+> retroactively to enrolments already made.
+
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pytest
