@@ -4,7 +4,14 @@
 .venv/bin/python -m pytest
 ```
 
-231 tests, all offline, no audio hardware. About 20 seconds, most of it
+CI runs this on every push, on Python 3.11, 3.12 and 3.13 — the versions
+Raspberry Pi OS and Debian stable ship, plus one canary. A second job installs
+**without `soxr` or `scipy`**, because both have fallbacks that only run when
+the library is missing, and a fallback nobody exercises is a fallback that is
+broken. That job earned its keep immediately: the scipy-free high-pass turned
+out not to remove rumble at all, and is now a boxcar filter that does.
+
+232 tests, all offline, no audio hardware. About 20 seconds, most of it
 the pipeline tests deliberately running a slow transcriber in real time.
 
 ## What each suite covers

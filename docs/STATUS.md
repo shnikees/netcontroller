@@ -6,7 +6,7 @@ it does — it is what has actually been *proven* to work.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 231 offline tests. Segmentation, transcription, callsign matching,
+audio, with 232 offline tests. Segmentation, transcription, callsign matching,
 splitting a clip that caught two stations, corrections and alias learning,
 voice suggestions, multi-source capture, buffering and disk spill, live
 transcript writing, the watchdog, export, and the container image.
@@ -87,7 +87,8 @@ Roughly in order of value per effort:
 5. **Session recovery.** A crashed net leaves a complete `transcripts/*.jsonl`,
    but nothing reads it back in. A `--resume` flag would let a restarted app
    continue the same log rather than starting a second one.
-6. **CI.** The tests only run when somebody remembers to run them.
+6. **CI** — done: GitHub Actions runs the suite on 3.11-3.13 plus a
+   minimal-dependency job that exercises the Pi fallbacks.
 
 ## Known limitations, not bugs
 

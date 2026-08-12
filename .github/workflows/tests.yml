@@ -1,0 +1,89 @@
+# Tests run on every push and pull request.
+#
+# Two jobs on purpose. The main one installs everything and runs the whole
+# suite. The second installs *only* the core dependencies, because this app is
+# built to survive on a Raspberry Pi where soxr and scipy may not be available
+# -- and a fallback path that is never exercised is a fallback path that is
+# broken. Both were written for hardware nobody has run them on yet.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 and 3.12 are what Raspberry Pi OS and Debian stable ship;
+        # 3.13 is the canary for what breaks next.
+        python: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install system libraries
+        # sounddevice needs PortAudio at import time, so even tests that never
+        # open a device need the library present.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libportaudio2
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        # No model download and no audio device: every test is offline by
+        # design, which is what makes this runnable in CI at all.
+        run: python -m pytest -q
+
+  minimal:
+    name: core dependencies only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libportaudio2
+
+      - name: Install without soxr or scipy
+        # The Pi case: high-quality resampling and the IIR high-pass are both
+        # optional, and each has a fallback that only runs when the library is
+        # missing. This job is the only place those fallbacks are exercised.
+        run: |
+          python -m pip install --upgrade pip
+          grep -vE '^(soxr|scipy)' requirements.txt > requirements-core.txt
+          pip install -r requirements-core.txt
+
+      - name: Confirm the optional libraries really are absent
+        run: |
+          python - <<'PY'
+          import importlib.util, sys
+          for name in ("soxr", "scipy"):
+              if importlib.util.find_spec(name) is not None:
+                  sys.exit(f"{name} is installed; this job would not test the fallback")
+          print("soxr and scipy absent, as intended")
+          PY
+
+      - name: Run tests
+        run: python -m pytest -q

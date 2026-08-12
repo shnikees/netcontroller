@@ -82,10 +82,39 @@ def high_pass(audio: np.ndarray, cutoff_hz: float = 80.0, rate: int = 16_000) ->
     """
     if audio.size < 8:
         return audio
-    if not HAVE_SCIPY:
-        return (audio - float(np.mean(audio))).astype(np.float32)
-    b, a = butter(2, cutoff_hz / (rate / 2), btype="highpass")
-    return lfilter(b, a, audio).astype(np.float32)
+    if HAVE_SCIPY:
+        b, a = butter(2, cutoff_hz / (rate / 2), btype="highpass")
+        return lfilter(b, a, audio).astype(np.float32)
+    return _boxcar_high_pass(audio, cutoff_hz, rate)
+
+
+def _boxcar_high_pass(audio: np.ndarray, cutoff_hz: float, rate: int) -> np.ndarray:
+    """High-pass without scipy: subtract a low-pass built from moving averages.
+
+    An IIR recursion cannot be vectorised and a Python loop over 80,000 samples
+    costs more than the transcription it is feeding. A moving average *can* be
+    vectorised -- it is a difference of cumulative sums -- and two of them in
+    series roll off smoothly enough for the job, which is removing rumble and
+    hum from below the voice band rather than meeting a filter specification.
+    """
+    # A boxcar of length N behaves like a low-pass at roughly 0.44 * rate / N.
+    width = max(3, int(0.44 * rate / cutoff_hz))
+    low = _moving_average(_moving_average(audio, width), width)
+    return (audio - low).astype(np.float32)
+
+
+def _moving_average(audio: np.ndarray, width: int) -> np.ndarray:
+    """Centred moving average, edges held, via cumulative sums."""
+    if width < 2 or audio.size < width:
+        return audio
+    padding = width // 2
+    padded = np.concatenate(
+        [np.full(padding, audio[0], dtype=np.float64), audio.astype(np.float64),
+         np.full(padding, audio[-1], dtype=np.float64)]
+    )
+    cumulative = np.cumsum(np.insert(padded, 0, 0.0))
+    smoothed = (cumulative[width:] - cumulative[:-width]) / width
+    return smoothed[: audio.size]
 
 
 def peak_normalize(

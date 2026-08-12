@@ -519,7 +519,9 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-231 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+232 tests, all offline, no audio hardware needed — CI runs them on every push
+across Python 3.11–3.13, plus a job with the optional libraries removed so the
+Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 

@@ -57,6 +57,21 @@ def test_dc_offset_is_removed() -> None:
     assert abs(float(np.mean(prepare(offset)))) < 0.01
 
 
+def test_the_scipy_free_fallback_also_removes_rumble(monkeypatch) -> None:
+    """The Pi case, and the reason CI runs a job without scipy at all.
+
+    A fallback that is never exercised is a fallback that is broken -- this one
+    was, until the minimal-dependency job said so.
+    """
+    import audio_prep
+
+    monkeypatch.setattr(audio_prep, "HAVE_SCIPY", False)
+    rumble = tone(40, amplitude=0.5)
+    speech = tone(1000, amplitude=0.5)
+    assert np.abs(audio_prep.high_pass(rumble)).max() < np.abs(rumble).max() * 0.5
+    assert np.abs(audio_prep.high_pass(speech)).max() > np.abs(speech).max() * 0.8
+
+
 def test_rumble_is_attenuated_and_speech_is_not() -> None:
     rumble = tone(40, amplitude=0.5)      # below the voice band
     speech = tone(1000, amplitude=0.5)    # in it
