@@ -183,6 +183,17 @@ class BufferingConfig:
 
 
 @dataclass
+class TranscriptConfig:
+    """Writing the session to disk as it happens, not only at the end."""
+
+    live: bool = True
+    dir: str = "transcripts"
+    fsync: bool = True
+    """Force each line to disk. The point is surviving a power cut, and a
+    buffered write that never landed would defeat it."""
+
+
+@dataclass
 class LoggingConfig:
     dir: str | None = "logs"
     """Set null to disable file logging and use the console only."""
@@ -203,6 +214,7 @@ class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
     buffering: BufferingConfig = field(default_factory=BufferingConfig)
+    transcripts: TranscriptConfig = field(default_factory=TranscriptConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     export_dir: str = "."
 
@@ -246,6 +258,7 @@ _SECTIONS = {
     "server": ServerConfig,
     "health": HealthConfig,
     "buffering": BufferingConfig,
+    "transcripts": TranscriptConfig,
     "logging": LoggingConfig,
 }
 

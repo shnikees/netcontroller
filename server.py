@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from callsign_match import CallsignMatcher, RosterEntry
 from feedback import FeedbackLog, record_correction
 from health import HealthFleet
+from session_writer import SessionWriter
 from transcript_store import TranscriptStore
 
 log = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ def create_app(
     feedback: FeedbackLog | None = None,
     health: HealthFleet | None = None,
     sources: list[str] | None = None,
+    session: SessionWriter | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Ham Net STT")
     by_callsign = {e.callsign: e for e in roster}
@@ -157,6 +159,9 @@ def create_app(
             callsign,
             f" (learned {candidate} -> {callsign})" if learned else "",
         )
+
+        if session is not None:
+            session.record_correction(entry)
 
         await broadcaster.broadcast(
             {"type": "correction", "entry": entry.to_dict(), "learned": learned}

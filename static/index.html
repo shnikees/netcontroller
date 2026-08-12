@@ -110,15 +110,39 @@
     cursor: pointer;
   }
   .src-mark:hover { background: var(--accent); color: #0d1017; }
-  #sources { margin-bottom: 1.25rem; }
-  #sources[hidden] { display: none; }
-  .source-item {
-    display: flex; align-items: center; gap: 0.5rem;
-    padding: 0.35rem 0.5rem; border-radius: 6px; cursor: pointer;
-    font-size: 0.95rem; color: var(--text);
+  /* One tab per receiver. The repeater is the frequency being monitored, so
+     it is first and selected by default; the others are there when needed. */
+  #tabs {
+    position: sticky; top: 3.75rem; z-index: 1;
+    display: flex; gap: 0.25rem; align-items: flex-end;
+    padding: 0.6rem 0.5rem 0;
+    background: var(--bg); border-bottom: 1px solid var(--line);
   }
-  .source-item:hover { background: #232a36; }
-  .source-item.selected { background: #2f3a4d; }
+  #tabs[hidden] { display: none; }
+  .tab {
+    display: flex; align-items: center; gap: 0.45rem;
+    padding: 0.5rem 0.9rem; cursor: pointer;
+    font-size: 0.95rem; color: var(--muted);
+    background: transparent; border: 1px solid transparent;
+    border-bottom: 2px solid transparent; border-radius: 8px 8px 0 0;
+  }
+  .tab:hover { background: #1e242f; color: var(--text); }
+  .tab.active {
+    color: var(--text); background: var(--panel);
+    border-color: var(--line); border-bottom-color: var(--accent);
+  }
+  .tab .dot { flex: none; }
+  /* Transmissions that arrived on a tab you are not looking at. Without this
+     you would miss a station checking in on the other frequency. */
+  .tab .unread {
+    min-width: 1.35rem; text-align: center;
+    padding: 0.05rem 0.35rem; border-radius: 999px;
+    background: var(--accent); color: #0d1017;
+    font-size: 0.7rem; font-weight: 700;
+  }
+  .tab .unread[hidden] { display: none; }
+  tr.hidden-source { display: none; }
+  #log.scoped .src-mark { display: none; }
   .late-mark {
     display: block; font-size: 0.65rem; color: var(--unmatched);
     text-transform: uppercase; letter-spacing: 0.06em;
@@ -168,11 +192,11 @@
 <div id="banner" hidden></div>
 <div class="layout">
   <aside>
-    <div id="sources" hidden></div>
     <h2>Roster</h2>
     <div id="roster"></div>
   </aside>
   <main>
+    <div id="tabs" hidden></div>
     <table>
       <thead>
         <tr>

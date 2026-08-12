@@ -32,9 +32,15 @@ const toast = document.getElementById("toast");
 
 let autoScroll = true;
 let filter = null;
-let sourceFilter = null;
 let roster = [];
 let sources = [];
+/* The active tab is a source name, or ALL for the combined view. The first
+   configured source wins by default -- that is the repeater, the frequency
+   being monitored, and it should be what is on screen when nobody has touched
+   anything. */
+const ALL = "\u0000all";
+let activeTab = null;
+const unread = new Map();
 const counts = new Map();
 const entries = [];
 const rows = new Map(); // entry id -> <tr>, so a correction can update in place
@@ -67,48 +73,76 @@ function setFilter(callsign) {
   renderRoster();
 }
 
-function setSourceFilter(name) {
-  sourceFilter = sourceFilter === name ? null : name;
-  applyFilters();
-  renderSources();
-}
-
-/* Callsign and source filters compose: "everything KJ6TUV said on the
-   repeater" is a question net control actually asks. */
+/* The tab decides which rows exist; the callsign filter dims within them, so
+   "everything KJ6TUV said on the repeater" still works. */
 function applyFilters() {
-  clearFilterBtn.hidden = !filter && !sourceFilter;
+  clearFilterBtn.hidden = !filter;
+  // On a per-source tab the badge just repeats the tab name on every line;
+  // it earns its place only in the combined view.
+  const scoped = sources.length > 1 && activeTab && activeTab !== ALL;
+  log.classList.toggle("scoped", !!scoped);
   for (const row of log.children) {
-    const hideCall = !!filter && row.dataset.callsign !== filter;
-    const hideSource = !!sourceFilter && row.dataset.source !== sourceFilter;
-    row.classList.toggle("dim", hideCall || hideSource);
+    row.classList.toggle("hidden-source", !rowInActiveTab(row));
+    row.classList.toggle(
+      "dim",
+      !!filter && row.dataset.callsign !== filter
+    );
   }
+  updateStats();
 }
 
-/* Per-source health, so a dead receiver is visible without reading the log. */
-function renderSources() {
-  const panel = document.getElementById("sources");
-  if (!panel) return;
+function rowInActiveTab(row) {
+  if (sources.length < 2 || activeTab === null || activeTab === ALL) return true;
+  return (row.dataset.source || "") === activeTab;
+}
+
+/* One tab per receiver, plus a combined view.
+   Each tab carries its own health dot, so a dead receiver is visible even
+   while you are looking at a different frequency, and an unread count, so a
+   check-in on the other tab does not go unnoticed. */
+function renderTabs() {
+  const bar = document.getElementById("tabs");
+  if (!bar) return;
   if (sources.length < 2) {
-    panel.hidden = true;
+    bar.hidden = true;
     return;
   }
-  panel.hidden = false;
-  panel.innerHTML =
-    `<h2>Sources</h2>` +
-    sources
-      .map((name) => {
-        const state = (sourceHealth[name] || {}).state || "unknown";
-        const selected = sourceFilter === name ? " selected" : "";
-        return (
-          `<div class="source-item${selected}" data-source="${name}">` +
-          `<span class="dot ${state === "ok" ? "live" : state}"></span>` +
-          `<span>${name}</span></div>`
-        );
-      })
-      .join("");
-  for (const item of panel.querySelectorAll(".source-item")) {
-    item.onclick = () => setSourceFilter(item.dataset.source);
+  bar.hidden = false;
+  if (activeTab === null) activeTab = sources[0];
+
+  const tabs = [...sources, ALL];
+  bar.innerHTML = tabs
+    .map((name) => {
+      const isAll = name === ALL;
+      const state = isAll ? null : (sourceHealth[name] || {}).state || "unknown";
+      const count = unread.get(name) || 0;
+      const dot = isAll
+        ? ""
+        : `<span class="dot ${state === "ok" ? "live" : state}"></span>`;
+      return (
+        `<div class="tab${activeTab === name ? " active" : ""}" data-tab="${name}">` +
+        dot +
+        `<span>${isAll ? "All" : escapeHTML(name)}</span>` +
+        `<span class="unread"${count ? "" : " hidden"}>${count}</span></div>`
+      );
+    })
+    .join("");
+
+  for (const tab of bar.querySelectorAll(".tab")) {
+    tab.onclick = () => selectTab(tab.dataset.tab);
   }
+}
+
+function selectTab(name) {
+  activeTab = name;
+  unread.set(name, 0);
+  applyFilters();
+  renderTabs();
+  if (autoScroll) scrollToBottom();
+}
+
+function scrollToBottom() {
+  window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
 }
 
 function callsignCellHTML(entry) {
@@ -153,7 +187,7 @@ function paintRow(row, entry) {
   if (badge) {
     badge.onclick = (event) => {
       event.stopPropagation();
-      setSourceFilter(badge.dataset.source);
+      selectTab(badge.dataset.source);
     };
   }
 }
@@ -177,10 +211,19 @@ function addEntry(entry, isNew) {
   row.dataset.timestamp = entry.timestamp;
   if (after) log.insertBefore(row, after);
   else log.appendChild(row);
+
+  if (isNew && entry.source && sources.length > 1 && activeTab !== entry.source
+      && activeTab !== ALL) {
+    unread.set(entry.source, (unread.get(entry.source) || 0) + 1);
+    renderTabs();
+  }
+  row.classList.toggle("hidden-source", !rowInActiveTab(row));
+
   emptyEl.hidden = true;
   updateStats();
   renderRoster();
-  if (autoScroll) window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  // Only chase the bottom for a row the operator can actually see.
+  if (autoScroll && rowInActiveTab(row)) scrollToBottom();
 }
 
 /* Corrections -------------------------------------------------------------
@@ -286,7 +329,7 @@ function renderHealth(health) {
   if (health.sources) {
     Object.assign(sourceHealth, health.sources);
     if (sources.length === 0) sources = Object.keys(health.sources);
-    renderSources();
+    renderTabs();
   }
 
   dot.classList.remove("warning", "error");
@@ -355,8 +398,16 @@ function showToast(message) {
 }
 
 function updateStats() {
-  const stations = new Set(entries.filter((e) => e.matched).map((e) => e.matched_callsign));
-  stats.textContent = `${entries.length} transmission${entries.length === 1 ? "" : "s"} · ${stations.size} station${stations.size === 1 ? "" : "s"}`;
+  const shown =
+    sources.length > 1 && activeTab && activeTab !== ALL
+      ? entries.filter((e) => e.source === activeTab)
+      : entries;
+  const stations = new Set(shown.filter((e) => e.matched).map((e) => e.matched_callsign));
+  const scope =
+    sources.length > 1 && activeTab && activeTab !== ALL ? ` on ${activeTab}` : "";
+  stats.textContent =
+    `${shown.length} transmission${shown.length === 1 ? "" : "s"} · ` +
+    `${stations.size} station${stations.size === 1 ? "" : "s"}${scope}`;
 }
 
 scrollBtn.onclick = () => {
@@ -364,11 +415,7 @@ scrollBtn.onclick = () => {
   scrollBtn.classList.toggle("active", autoScroll);
   scrollBtn.textContent = `Auto-scroll: ${autoScroll ? "on" : "off"}`;
 };
-clearFilterBtn.onclick = () => {
-  sourceFilter = null;
-  setFilter(null);
-  renderSources();
-};
+clearFilterBtn.onclick = () => setFilter(null);
 exportBtn.onclick = async () => {
   exportBtn.disabled = true;
   try {
@@ -393,7 +440,8 @@ async function loadHistory() {
     for (const entry of data.entries) addEntry(entry, false);
   }
   renderRoster();
-  renderSources();
+  renderTabs();
+  applyFilters();
 }
 
 function connect() {

@@ -34,6 +34,8 @@ is shared.
                                │  MatchResult(matched, callsign, score, …)
                                ▼
                     transcript_store.py   in-memory log, ordered by timestamp
+                               │      │  every line, as it happens
+                               │      ├─► session_writer.py  .jsonl + .txt on disk
                                │      ▲
                                │      │ corrections (POST /api/correct)
                                │  feedback.py   append-only log → learned aliases
@@ -63,6 +65,7 @@ code. `app.py` wires everything together and owns the process lifecycle.
 | `callsign_match.py` | Normalizer + roster matcher — the domain logic |
 | `feedback.py` | Operator corrections, and the aliases learned from them |
 | `transcript_store.py` | Session log, ordering, CSV/text export |
+| `session_writer.py` | Streams the session to disk as it happens |
 | `health.py` | Per-source health, and the combined verdict |
 | `logging_setup.py` | Console + rotating file logging |
 | `config.py` | YAML + `NETSTT_*` env overrides |
@@ -272,6 +275,23 @@ after later ones but was spoken earlier, and belongs where it was spoken.
 
 Corrections keep `original_callsign`, so the log still records where the
 machine was wrong — that record is the point, not an embarrassment to hide.
+
+### `session_writer.py`
+
+Transcripts used to reach disk only on a clean exit or an Export click, which
+holds right up until the Pi loses power and two hours of net vanish — the one
+outcome this app exists to prevent.
+
+Now every line is written as it is produced, in two files because they answer
+different questions. The `.jsonl` is append-only and fsynced: the durable
+record, which survives a power cut minus at most its last line, and which keeps
+corrections as their own entries so the history stays auditable. The `.txt` is
+rewritten in transmission order after each change, so the readable copy is
+never behind — rewriting is cheap at net scale and removes the "remember to
+export" step.
+
+Failures degrade rather than propagate: a full or read-only disk disables
+writing, logs once, and lets the net carry on.
 
 ### `config.py`
 

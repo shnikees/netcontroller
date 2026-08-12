@@ -4,7 +4,7 @@
 .venv/bin/python -m pytest
 ```
 
-167 tests, all offline, no audio hardware. About 20 seconds, most of it
+177 tests, all offline, no audio hardware. About 20 seconds, most of it
 the pipeline tests deliberately running a slow transcriber in real time.
 
 ## What each suite covers
@@ -16,6 +16,7 @@ the pipeline tests deliberately running a slow transcriber in real time.
 | `test_transcript_store.py` | Session log, check-in list, CSV/text export | Direct |
 | `test_feedback.py` | Correction log, alias derivation, matcher applying aliases | Direct, plus a simulated truncated write |
 | `test_server.py` | HTTP API, mainly `/api/correct` | FastAPI `TestClient` |
+| `test_session_writer.py` | Writing the session to disk mid-net, corrections as history, truncated writes, unwritable disks | Reads the file back *during* the session, never only after a clean close |
 | `test_health.py` | Watchdog state machine: stalls, silence, restarts, backlog | Injected clock, so a 5-minute silence tests in microseconds |
 | `test_resample.py` | Resampling to 16 kHz | Tones in, FFT out — run against *both* engines, so the fallback is not dead code |
 | `test_buffering.py` | Ring buffer and disk spill: wraparound, overrun policy, concurrency, corrupt files | Direct, with real threads |

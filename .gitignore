@@ -11,3 +11,4 @@ net-log-*.json
 .pytest_cache/
 logs/
 spill/
+transcripts/

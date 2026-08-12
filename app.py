@@ -57,6 +57,7 @@ from health import ERROR, OK, WARNING, HealthFleet, HealthMonitor
 from logging_setup import setup_logging
 from resample import Resampler, describe
 from server import Broadcaster, create_app
+from session_writer import SessionWriter
 from stt_worker import SttWorker
 from transcript_store import TranscriptStore
 from vad_segmenter import VadSegmenter
@@ -288,6 +289,7 @@ class Pipeline:
         loop: asyncio.AbstractEventLoop,
         fleet: HealthFleet,
         wav_path: str | None = None,
+        session: SessionWriter | None = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -295,6 +297,7 @@ class Pipeline:
         self.broadcaster = broadcaster
         self.loop = loop
         self.fleet = fleet
+        self.session = session
         self._stop = threading.Event()
         self._stt_thread: threading.Thread | None = None
         self._sequence = 0
@@ -488,6 +491,8 @@ class Pipeline:
             late=late,
             source=clip.source if self.multi_source else "",
         )
+        if self.session is not None:
+            self.session.append(entry)
         log.info(
             "%s |%s %s | %s%s",
             entry.timestamp,
@@ -598,6 +603,15 @@ async def run(config: Config, wav_path: str | None) -> None:
 
     store = TranscriptStore()
     broadcaster = Broadcaster()
+
+    session = None
+    if config.transcripts.live:
+        session = SessionWriter(
+            config.transcripts.dir, store, fsync=config.transcripts.fsync
+        )
+        path = session.start()
+        if path:
+            log.info("Writing this session to %s (and the .txt beside it)", path)
     fleet = HealthFleet(
         stall_after_s=config.health.stall_after_s,
         silence_after_s=config.health.silence_after_s,
@@ -612,6 +626,7 @@ async def run(config: Config, wav_path: str | None) -> None:
         feedback=feedback,
         health=fleet,
         sources=[s.name for s in audio_sources(config)],
+        session=session,
     )
 
     pipeline = Pipeline(
@@ -622,6 +637,7 @@ async def run(config: Config, wav_path: str | None) -> None:
         asyncio.get_running_loop(),
         fleet,
         wav_path,
+        session=session,
     )
     pipeline.start()
     watch = asyncio.create_task(watchdog(config, fleet, broadcaster))
@@ -657,6 +673,8 @@ async def run(config: Config, wav_path: str | None) -> None:
                 config.buffering.spill_dir,
             )
         pipeline.stop()
+        if session is not None:
+            session.close()
         if store.entries:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             path = store.export_text(Path(config.export_dir) / f"net-log-{stamp}.txt")

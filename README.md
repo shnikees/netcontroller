@@ -151,11 +151,15 @@ differences at the input. `priority` decides who goes first when there is a
 backlog — put the frequency the net actually runs on above the side traffic, so
 a slow moment delays the staging channel rather than the main log.
 
-Every line is tagged with the receiver that heard it, and the sidebar grows a
-per-source health panel — click a source to filter the log to it, which
-composes with the callsign filter. Sources are captured independently, so a
-receiver that drops does not take the net down with it; the banner names the
-one that broke.
+**Each receiver gets its own tab**, and the first one listed is the default —
+put the repeater there, since that is the frequency actually being monitored.
+Each tab carries a health dot, so a dead receiver is visible while you are
+looking at a different frequency, and an unread count, so a check-in on the
+other tab does not go unnoticed. An **All** tab shows everything interleaved by
+time.
+
+Sources are captured independently, so a receiver that drops does not take the
+net down with it; the banner names the one that broke.
 
 They share a single Whisper model on purpose. It is the memory-hungry part,
 and two on a Pi would thrash rather than go faster; serialising costs a little
@@ -300,6 +304,25 @@ holding verbatim Whisper output. When your net turns up a new mis-transcription:
 2. Add the missing spelling to `PHONETIC_MAP` / `AMBIGUOUS_DIGIT_MAP`.
 3. Run `pytest` and confirm nothing else broke.
 
+## Transcripts are written as the net runs
+
+The session does not live only in memory waiting for a clean shutdown. Every
+line goes to disk as it is produced, into `transcripts/`:
+
+| File | What it is |
+| --- | --- |
+| `net-<stamp>.jsonl` | Append-only, one JSON object per line, fsynced. The durable record, and an auditable history — corrections are appended rather than overwriting what the machine originally said. |
+| `net-<stamp>.txt` | The human-readable log, rewritten in transmission order after every change. Always current; this is the one that gets pasted into a net report. |
+
+Verified the way it matters: `kill -9` mid-net, no cleanup of any kind, and the
+complete log was on disk. A power cut costs at most the last line.
+
+Set `transcripts.live: false` to turn it off, or `fsync: false` if you would
+rather have the few milliseconds back than the guarantee.
+
+**Export log** still works for an on-demand copy, and a clean exit still writes
+a final one — but neither is now the thing standing between you and a lost net.
+
 ## Watchdog, logging, and alerting
 
 The failure worth guarding against is not a crash — it is the pipeline that
@@ -350,8 +373,8 @@ quiet before it is worth telling you about.
 - Roster sidebar doubles as a check-in list — stations light up as they check
   in, with a count. Click one to filter the log to that station.
 - **Auto-scroll** toggle for reviewing history mid-net without fighting the log.
-- **Export log** writes a CSV and a text log to `export_dir`. The text log is
-  also written automatically on exit, so a Ctrl-C never loses the session.
+- **Export log** writes a CSV and a text log to `export_dir` on demand — but you
+  do not have to remember to press it (see below).
 
 The page reconnects on its own if the app restarts.
 
@@ -361,7 +384,7 @@ The page reconnects on its own if the app restarts.
 .venv/bin/python -m pytest
 ```
 
-167 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+177 tests, all offline, no audio hardware needed. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 

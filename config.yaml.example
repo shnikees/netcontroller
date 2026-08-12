@@ -156,6 +156,17 @@ buffering:
   # still make the exported log.
   drain_timeout_s: 30.0
 
+# The session is written to disk as it happens, not only when you press Export
+# or shut down cleanly. Two files per session: an append-only .jsonl (the
+# durable record, fsynced per line) and a .txt kept in transmission order (the
+# one you paste into a net report).
+transcripts:
+  live: true
+  dir: transcripts
+  # Force each line to disk. The point is surviving a power cut, and a buffered
+  # write that never landed would defeat it. Costs a few ms per transmission.
+  fsync: true
+
 logging:
   # Rotating file log, kept alongside the console. Set null for console only.
   dir: logs
