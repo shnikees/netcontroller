@@ -96,6 +96,19 @@ class SttWorker:
     prompt_terms_used: int = field(default=0, init=False)
     prompt_terms_offered: int = field(default=0, init=False)
 
+    def reload(self, model_size: str | None = None) -> None:
+        """Drop the current model and load again, optionally a different size.
+
+        Called between clips on the STT thread, never underneath one. The
+        buffering exists precisely so the seconds this takes cost latency
+        rather than audio.
+        """
+        if model_size:
+            self.model_size = model_size
+        self._model = None
+        self._tokenizer_cache = None
+        self.load()
+
     def load(self) -> None:
         """Load the model. Called eagerly at startup so the first check-in of
         the net is not the thing that pays the download/init cost."""

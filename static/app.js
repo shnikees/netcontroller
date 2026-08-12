@@ -582,3 +582,160 @@ function connect() {
 }
 
 loadHistory().then(connect);
+
+/* Settings ----------------------------------------------------------------
+   The handful of things somebody reaches for mid-event, where walking to a
+   terminal costs transmissions. Changes apply immediately and in memory;
+   writing them back to config.yaml is a separate, deliberate button, because
+   a change made during a net is often a change for tonight only. */
+
+const settingsPanel = document.getElementById("settings");
+const settingsBody = document.getElementById("settingsBody");
+const settingsBtn = document.getElementById("settingsBtn");
+const settingsSave = document.getElementById("settingsSave");
+const changedSettings = new Set();
+
+settingsBtn.onclick = () => (settingsPanel.hidden ? openSettings() : closeSettings());
+document.getElementById("settingsClose").onclick = closeSettings;
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !settingsPanel.hidden) closeSettings();
+});
+
+function closeSettings() {
+  settingsPanel.hidden = true;
+  settingsBtn.classList.remove("active");
+}
+
+async function openSettings() {
+  settingsPanel.hidden = false;
+  settingsBtn.classList.add("active");
+  try {
+    const data = await (await fetch("/api/settings")).json();
+    renderSettings(data.settings || [], data.config_path);
+  } catch (err) {
+    settingsBody.innerHTML = `<p class="help">Could not load settings: ${escapeHTML(err.message)}</p>`;
+  }
+}
+
+function renderSettings(list, configPath) {
+  settingsSave.disabled = !configPath;
+  settingsSave.title = configPath
+    ? `Write the changes into ${configPath}`
+    : "No config file to write to — started without one";
+
+  const groups = [];
+  for (const setting of list) {
+    let group = groups.find((g) => g.name === setting.group);
+    if (!group) groups.push((group = { name: setting.group, items: [] }));
+    group.items.push(setting);
+  }
+
+  settingsBody.innerHTML = groups
+    .map(
+      (group) =>
+        `<div class="setting-group">${escapeHTML(group.name)}</div>` +
+        group.items.map(settingHTML).join("")
+    )
+    .join("");
+
+  for (const element of settingsBody.querySelectorAll("[data-path]")) {
+    const commit = () => {
+      const value =
+        element.type === "checkbox" ? element.checked : element.value;
+      applySetting(element.dataset.path, value, element);
+    };
+    // Ranges report live but only commit on release: dragging a slider should
+    // not fire twenty model reloads.
+    if (element.type === "range") {
+      element.oninput = () => {
+        const readout = element.parentElement.querySelector(".value");
+        if (readout) readout.textContent = element.value;
+      };
+      element.onchange = commit;
+    } else {
+      element.onchange = commit;
+    }
+  }
+}
+
+function settingHTML(setting) {
+  const id = `set-${setting.path.replace(/[^a-z0-9]/gi, "-")}`;
+  const changed = changedSettings.has(setting.path) ? " changed" : "";
+  let control;
+
+  if (setting.kind === "bool") {
+    control =
+      `<input type="checkbox" id="${id}" data-path="${setting.path}"` +
+      `${setting.value ? " checked" : ""}>`;
+  } else if (setting.kind === "choice") {
+    control =
+      `<select id="${id}" data-path="${setting.path}">` +
+      setting.choices
+        .map(
+          (choice) =>
+            `<option value="${choice}"${choice === setting.value ? " selected" : ""}>${choice}</option>`
+        )
+        .join("") +
+      `</select>`;
+  } else {
+    // A slider for anything with bounds: mid-net, dragging beats typing.
+    control =
+      `<input type="range" id="${id}" data-path="${setting.path}"` +
+      ` min="${setting.min}" max="${setting.max}" step="${setting.step || 1}"` +
+      ` value="${setting.value}"><span class="value">${setting.value}</span>`;
+  }
+
+  return (
+    `<div class="setting${changed}" data-setting="${setting.path}">` +
+    `<div class="setting-row"><label for="${id}">${escapeHTML(setting.label)}</label>${control}</div>` +
+    `<span class="help">${escapeHTML(setting.help)}</span>` +
+    (setting.cost ? `<span class="cost">${escapeHTML(setting.cost)}</span>` : "") +
+    `</div>`
+  );
+}
+
+async function applySetting(path, value, element) {
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, value }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "rejected");
+
+    changedSettings.add(path);
+    const row = settingsBody.querySelector(`[data-setting="${path}"]`);
+    if (row) row.classList.add("changed");
+    settingsSave.classList.add("active");
+    showToast(data.cost ? `${path} set — ${data.cost}` : `${path} set to ${data.value}`);
+  } catch (err) {
+    showToast(`Could not change ${path}: ${err.message}`);
+    openSettings(); // re-read, so the control shows what is actually in force
+  }
+}
+
+settingsSave.onclick = async () => {
+  try {
+    const res = await fetch("/api/settings/save", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "could not save");
+    const written = (data.written || []).length;
+    const missing = (data.missing || []).length;
+    showToast(
+      written
+        ? `Saved ${written} setting${written === 1 ? "" : "s"}` +
+          (missing ? ` — ${missing} not found in the file` : "")
+        : "Nothing to save"
+    );
+    if (written) {
+      changedSettings.clear();
+      settingsSave.classList.remove("active");
+      for (const row of settingsBody.querySelectorAll(".setting.changed")) {
+        row.classList.remove("changed");
+      }
+    }
+  } catch (err) {
+    showToast(`Could not save: ${err.message}`);
+  }
+};

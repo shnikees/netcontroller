@@ -59,6 +59,7 @@ from feedback import FeedbackLog
 from health import ERROR, OK, WARNING, HealthFleet, HealthMonitor
 from logging_setup import setup_logging
 from resample import Resampler, describe
+import settings as settings_registry
 from server import Broadcaster, create_app
 from session_writer import SessionWriter, latest_session, read_session
 from stt_worker import SttWorker
@@ -360,6 +361,8 @@ class Pipeline:
         )
         self._prompts: dict[str, str] = {}
         self._prompt_generation = -1
+        self._pending_model: str | None = None
+        """A model change requested from the dashboard, applied between clips."""
 
         # Voices, learned from clean matches and from operator corrections.
         self.voices = VoiceProfiles(
@@ -448,6 +451,63 @@ class Pipeline:
                 return 0
             time.sleep(0.2)
         return self._clips.qsize() + self.spill.pending()
+
+    # -- settings changed while running ------------------------------------
+
+    def apply_setting(self, path: str, value) -> None:
+        """Make a config change take effect now.
+
+        Several components keep their own copy of a setting -- the matcher, each
+        source's segmenter, the open audio device -- because reading through the
+        config on every frame would be silly. So a live change has to be pushed
+        to them, and this is the one place that knows where those copies are.
+        """
+        settings_registry.set_value(self.config, path, value)
+
+        if path == "roster.threshold":
+            self.matcher.threshold = float(value)
+        elif path == "roster.ambiguity_margin":
+            self.matcher.ambiguity_margin = float(value)
+        elif path.startswith("vad."):
+            key = path.split(".", 1)[1]
+            for source in self.sources:
+                # Per-source overrides win: a change to the global default must
+                # not quietly overwrite a receiver that was set deliberately.
+                if getattr(source.source, key, None) is None:
+                    setattr(source.segmenter, key, value)
+        elif path.startswith("sources.") and path.endswith(".gain"):
+            name = path.split(".")[1]
+            for source in self.sources:
+                if source.name == name and source._capture is not None:
+                    source._capture.gain = float(value)
+        elif path == "whisper.model_size":
+            # Handed to the STT thread rather than swapped here: another thread
+            # is inside the model right now.
+            self._pending_model = str(value)
+        elif path == "whisper.beam_size":
+            self.stt.beam_size = int(value)
+            if self._escalator is not None:
+                self._escalator.beam_size = int(value)
+        elif path == "escalation.model_size":
+            self._escalator = None  # reloaded lazily at its next use
+        elif path == "voice.enabled" and value and not self.voices.profiles:
+            self.voices.load()
+
+        log.info("Setting changed: %s = %s", path, value)
+
+    def _apply_pending_model(self) -> None:
+        """Swap the live model, on the thread that owns it."""
+        pending, self._pending_model = self._pending_model, None
+        if not pending or pending == self.stt.model_size:
+            return
+        log.info("Switching live model to %s; audio buffers while it loads", pending)
+        try:
+            self.stt.reload(pending)
+            self._prompts.clear()  # rebuilt against the new tokenizer
+            log.info("Live model now %s", pending)
+        except Exception as exc:
+            self.fleet.note_error(f"could not load {pending}: {exc}")
+            log.exception("Could not switch to %s; keeping the current model", pending)
 
     # -- prompts -----------------------------------------------------------
 
@@ -677,6 +737,8 @@ class Pipeline:
         dry -- a lull between check-ins, or after the net ends.
         """
         while not self._stop.is_set():
+            if self._pending_model:
+                self._apply_pending_model()
             try:
                 item = self._clips.get(timeout=0.5)
             except queue.Empty:
@@ -898,6 +960,7 @@ async def run(
     wav_path: str | None,
     batch: bool = False,
     resume: str | None = None,
+    config_path: str | None = None,
 ) -> None:
     roster = load_roster(config.roster.path)
     log.info("Loaded %d roster entries from %s", len(roster), config.roster.path)
@@ -973,6 +1036,8 @@ async def run(
         sources=[s.name for s in audio_sources(config)],
         session=session,
         acknowledge_traffic=config.traffic.detect and config.traffic.acknowledge,
+        config=config,
+        config_path=str(config_path) if config_path else None,
     )
 
     pipeline = Pipeline(
@@ -985,8 +1050,11 @@ async def run(
         wav_path,
         session=session,
     )
-    # The correction endpoint learns the voice as well as the alias.
+    # The correction endpoint learns the voice as well as the alias, and the
+    # settings endpoint needs the pipeline to push changes into the components
+    # that hold their own copies.
     app.state.enrol_voice = pipeline.enrol_from_correction
+    app.state.apply_setting = pipeline.apply_setting
     pipeline.start()
     watch = asyncio.create_task(watchdog(config, fleet, broadcaster))
 
@@ -1081,7 +1149,15 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
-        asyncio.run(run(config, args.file, batch=args.batch, resume=args.resume))
+        asyncio.run(
+            run(
+                config,
+                args.file,
+                batch=args.batch,
+                resume=args.resume,
+                config_path=config_path,
+            )
+        )
     except KeyboardInterrupt:
         pass
     return 0

@@ -27,6 +27,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import config_writer
+import settings as settings_registry
 from callsign_match import CallsignMatcher, RosterEntry
 from feedback import FeedbackLog, record_correction
 from health import HealthFleet
@@ -45,6 +47,11 @@ class CorrectionRequest(BaseModel):
 class TrafficRequest(BaseModel):
     entry_id: int
     cleared: bool = True
+
+
+class SettingRequest(BaseModel):
+    path: str
+    value: object
 
 
 class Broadcaster:
@@ -85,9 +92,14 @@ def create_app(
     sources: list[str] | None = None,
     session: SessionWriter | None = None,
     acknowledge_traffic: bool = True,
+    config=None,
+    on_setting=None,
+    config_path: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Ham Net STT")
     by_callsign = {e.callsign: e for e in roster}
+    app.state.settings_dirty: set[str] = set()
+    app.state.settings_saved = True
 
     @app.middleware("http")
     async def no_cache(request, call_next):  # noqa: ANN001, ANN202
@@ -216,6 +228,86 @@ def create_app(
         return JSONResponse(
             {"entry": entry.to_dict(), "outstanding": store.holding_traffic()}
         )
+
+    @app.get("/api/settings")
+    async def settings_list() -> JSONResponse:
+        """The settings worth changing mid-net, with their current values."""
+        if config is None:
+            return JSONResponse({"settings": [], "config_path": None})
+        return JSONResponse(
+            {
+                "settings": settings_registry.describe(config),
+                "config_path": config_path,
+                "saved": app.state.settings_saved,
+            }
+        )
+
+    @app.post("/api/settings")
+    async def settings_set(payload: SettingRequest) -> JSONResponse:
+        """Change one setting, now, in memory.
+
+        Deliberately not written to disk: a change made mid-net is often a
+        change for tonight only, and quietly rewriting the config would make
+        every experiment permanent. Saving is a separate button.
+        """
+        apply = on_setting or getattr(app.state, "apply_setting", None)
+        if config is None or apply is None:
+            return JSONResponse({"error": "settings are not editable"}, status_code=403)
+
+        setting = settings_registry.find(config, payload.path)
+        if setting is None:
+            return JSONResponse(
+                {"error": f"unknown setting {payload.path}"}, status_code=404
+            )
+        try:
+            value = settings_registry.coerce(setting, payload.value)
+        except ValueError as exc:
+            return JSONResponse({"error": f"{setting.label}: {exc}"}, status_code=400)
+
+        apply(payload.path, value)
+        app.state.settings_dirty.add(payload.path)
+        app.state.settings_saved = False
+        return JSONResponse(
+            {"path": payload.path, "value": value, "cost": setting.cost}
+        )
+
+    @app.post("/api/settings/save")
+    async def settings_save() -> JSONResponse:
+        """Write the changes made this session back to config.yaml.
+
+        Only the keys that were actually changed, patched in place so the
+        comments explaining them survive.
+        """
+        if config is None or not config_path:
+            return JSONResponse({"error": "no config file to write"}, status_code=400)
+        # Where a setting lives in the file is not always where it lives in
+        # memory: a single-input setup has no `sources:` block.
+        wanted = {
+            settings_registry.file_path(config, path): settings_registry.get_value(
+                config, path
+            )
+            for path in sorted(app.state.settings_dirty)
+        }
+        if not wanted:
+            return JSONResponse({"written": [], "missing": []})
+
+        result = config_writer.patch(config_path, wanted)
+        if result.get("error"):
+            return JSONResponse(result, status_code=400)
+        if result["written"]:
+            saved = set(result["written"])
+            app.state.settings_dirty = {
+                path
+                for path in app.state.settings_dirty
+                if settings_registry.file_path(config, path) not in saved
+            }
+            app.state.settings_saved = not app.state.settings_dirty
+        log.info(
+            "Settings saved to %s: %s",
+            config_path,
+            ", ".join(result["written"]) or "nothing",
+        )
+        return JSONResponse(result)
 
     @app.get("/api/health")
     async def health_check() -> JSONResponse:

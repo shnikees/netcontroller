@@ -42,7 +42,7 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 309 offline tests. Segmentation, transcription, callsign matching,
+audio, with 329 offline tests. Segmentation, transcription, callsign matching,
 splitting a clip that caught two stations, corrections and alias learning,
 voice suggestions, multi-source capture, buffering and disk spill, live
 transcript writing, the watchdog, export, and the container image.

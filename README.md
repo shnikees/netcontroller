@@ -284,6 +284,38 @@ the name.
 To hear the net yourself at the same time, use a combined sink or set the SDR
 app to duplicate its output — the monitor source does not consume the audio.
 
+## Settings, without leaving the net
+
+The dashboard has a **Settings** panel for the handful of things somebody
+reaches for mid-event, when walking to a terminal costs transmissions:
+
+| Group | What it covers |
+| --- | --- |
+| Transcription | Model size, beam size, second-pass escalation |
+| Segmentation | Pause that ends a transmission, squelch rejection, shortest transmission, gap between two stations |
+| Matching | Match confidence, ambiguity margin |
+| Dashboard | Traffic marking and clearing, voice suggestions |
+| Audio | Input level, one control per receiver |
+
+Changes **apply immediately and in memory**. Writing them back to
+`config.yaml` is a separate button, because a change made during a net is
+often a change for tonight only, and quietly rewriting the config would make
+every experiment permanent. Saving patches the values in place, so the
+comments explaining what each threshold is for survive, and it leaves a
+`.bak` beside the file.
+
+Switching the live model is the only setting that costs anything, and it costs
+latency rather than audio: the swap happens between clips while capture keeps
+buffering. Verified mid-net on a six-transmission recording — the model changed
+partway and all six lines still landed.
+
+Bounds live with each setting rather than in the browser, so a hand-made
+request cannot put the pipeline somewhere it will not come back from.
+
+Everything else stays in the file. Device names, ports, buffer depths and
+paths are set once at install, and a UI for them would be a text editor with
+extra steps.
+
 ## Configuration
 
 Everything lives in `config.yaml` (see `config.yaml.example` for the annotated
@@ -669,7 +701,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-309 tests, all offline, no audio hardware needed — CI runs them on every push
+329 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

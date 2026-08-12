@@ -79,6 +79,8 @@ code. `app.py` wires everything together and owns the process lifecycle.
 | `health.py` | Per-source health, and the combined verdict |
 | `logging_setup.py` | Console + rotating file logging |
 | `config.py` | YAML + `NETSTT_*` env overrides |
+| `settings.py` | Which settings a dashboard may change, and their bounds |
+| `config_writer.py` | Patching config.yaml in place, comments intact |
 | `server.py` | HTTP + websocket |
 | `static/` | Dashboard |
 
@@ -400,6 +402,33 @@ file into it. Unknown YAML keys are ignored rather than fatal.
 `sources:` (a list) and the single `audio:` block are both valid;
 `audio_sources()` resolves whichever is present. Breaking every existing config
 to add a feature most operators will not use would be a poor trade.
+
+### `settings.py` and `config_writer.py`
+
+Only some of `config.yaml` belongs in a dashboard. The test is whether
+somebody would reach for it *mid-event*, when walking to a terminal costs
+transmissions: a level that turns out wrong once traffic starts, a model that
+cannot keep up tonight, a threshold splitting the wrong things. Device names
+and buffer depths fail that test and stay in the file.
+
+Each setting carries its own bounds, because the browser is not the only thing
+that can send a request. Validation lives with the definition, not in the
+markup.
+
+Applying a change is the interesting part: several components keep their own
+copy of a setting -- the matcher, each source's segmenter, the open audio
+device -- because reading through the config on every frame would be silly.
+`Pipeline.apply_setting` is the one place that knows where those copies are.
+Two cases are handled specially: a global VAD change skips any source with a
+per-source override, so a receiver set deliberately is not quietly reset, and
+a model change is handed to the STT thread rather than swapped underneath it,
+taking effect between clips while the buffering absorbs the pause.
+
+`config_writer` patches values in place rather than doing a YAML round-trip,
+which would discard every comment in the file -- and those comments are most
+of what makes the config readable. The cost is that it only edits keys that
+already exist; a deleted key is reported back rather than appended somewhere
+arbitrary with no explanation beside it.
 
 ### `logging_setup.py`
 

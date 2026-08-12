@@ -204,6 +204,40 @@
   #banner ul { margin: 0; padding-left: 1.1rem; }
   .dot.warning { background: var(--unmatched); }
   .dot.error { background: #ff6b6b; }
+  /* Settings drawer. Slides over the log rather than replacing it: net
+     control should still see the net while adjusting it. */
+  #settings {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(30rem, 100vw);
+    background: var(--panel); border-left: 1px solid var(--line);
+    box-shadow: -12px 0 40px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column; z-index: 6;
+  }
+  #settings[hidden] { display: none; }
+  #settings header {
+    position: static; display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.9rem 1.1rem; border-bottom: 1px solid var(--line);
+  }
+  #settings h2 { margin: 0; font-size: 1rem; }
+  #settings .hint { font-size: 0.75rem; color: var(--muted); }
+  #settingsBody { overflow-y: auto; padding: 0.5rem 1.1rem 2rem; }
+  .setting-group {
+    margin-top: 1.2rem; font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--muted);
+  }
+  .setting { padding: 0.7rem 0; border-bottom: 1px solid var(--line); }
+  .setting-row { display: flex; align-items: center; gap: 0.75rem; }
+  .setting-row label { flex: 1; font-size: 0.95rem; }
+  .setting-row input[type="number"], .setting-row select {
+    font: inherit; font-size: 0.9rem; width: 7.5rem;
+    background: #2a3140; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 0.25rem 0.4rem;
+  }
+  .setting-row input[type="range"] { flex: 1.2; accent-color: var(--accent); }
+  .setting-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
+  .setting .help { display: block; margin-top: 0.3rem; font-size: 0.78rem; color: var(--muted); line-height: 1.35; }
+  .setting .cost { display: block; margin-top: 0.25rem; font-size: 0.75rem; color: var(--unmatched); }
+  .setting.changed { background: rgba(111, 179, 255, 0.06); }
+  .setting .value { min-width: 3.5rem; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.9rem; }
   .empty { color: var(--muted); padding: 2rem 0.5rem; }
   tr.new { animation: flash 1.2s ease-out; }
   @keyframes flash { from { background: rgba(111, 179, 255, 0.18); } to { background: transparent; } }
@@ -219,6 +253,7 @@
   <button id="scrollBtn" class="active">Auto-scroll: on</button>
   <button id="trafficBtn" hidden title="Show only transmissions that declared traffic">Traffic: 0</button>
   <button id="clearFilter" hidden>Clear filter</button>
+  <button id="settingsBtn" title="Adjust settings without leaving the net">Settings</button>
   <button id="exportBtn">Export log</button>
 </header>
 <div id="banner" hidden></div>
@@ -244,6 +279,16 @@
   </main>
 </div>
 <div class="toast" id="toast" hidden></div>
+<div id="settings" hidden>
+  <header>
+    <h2>Settings</h2>
+    <span class="hint">Applied immediately. Saving is separate.</span>
+    <span class="spacer"></span>
+    <button id="settingsSave">Save to config.yaml</button>
+    <button id="settingsClose">Close</button>
+  </header>
+  <div id="settingsBody"></div>
+</div>
 <script src="/static/app.js"></script>
 </body>
 </html>
