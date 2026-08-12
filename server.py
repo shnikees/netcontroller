@@ -108,6 +108,7 @@ def create_app(
                     for e in roster
                 ],
                 "check_ins": store.check_ins(),
+                "holding_traffic": store.holding_traffic(),
                 "sources": sources or [],
             }
         )

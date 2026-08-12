@@ -58,6 +58,10 @@ class TranscriptEntry:
     position: str = ""
     """Where the station is posted. On an event net this is the point of
     identifying them at all: the callsign says where the traffic came from."""
+    traffic: str = ""
+    """"yes" if this transmission declared traffic, "no" if it explicitly had
+    none, empty if it did not say -- three states, because "nothing to pass"
+    and "did not mention it" are different facts."""
     suggested_callsign: str | None = None
     """Whose voice this sounds like. A suggestion for the operator, never an
     assignment -- see voice_id.py."""
@@ -89,6 +93,7 @@ class TranscriptStore:
         late: bool = False,
         source: str = "",
         position: str = "",
+        traffic: str = "",
     ) -> TranscriptEntry:
         entry = TranscriptEntry(
             id=self._next_id,
@@ -106,6 +111,7 @@ class TranscriptStore:
             late=late,
             source=source,
             position=position,
+            traffic=traffic,
         )
         self._next_id += 1
         # Keep the log in transmission order. A clip recovered from the disk
@@ -222,6 +228,18 @@ class TranscriptStore:
                 seen.append(entry.matched_callsign)  # type: ignore[arg-type]
         return seen
 
+    def holding_traffic(self) -> list[str]:
+        """Stations that declared traffic, in the order they first did."""
+        seen: list[str] = []
+        for entry in self.entries:
+            if (
+                entry.traffic == "yes"
+                and entry.matched
+                and entry.matched_callsign not in seen
+            ):
+                seen.append(entry.matched_callsign)  # type: ignore[arg-type]
+        return seen
+
     # -- export ------------------------------------------------------------
 
     def export_csv(self, path: str | Path) -> Path:
@@ -254,8 +272,14 @@ class TranscriptStore:
                 was = entry.original_callsign or "unmatched"
                 who = f"{who} [corrected from {was}]"
             where = f" ({entry.source})" if multi and entry.source else ""
-            lines.append(f"[{entry.timestamp}]{where} {who}: {entry.raw_text}")
+            # Traffic is marked, not spelled out: somebody scanning the log
+            # afterwards for what still needs passing can find it.
+            flag = " [TRAFFIC]" if entry.traffic == "yes" else ""
+            lines.append(f"[{entry.timestamp}]{where} {who}:{flag} {entry.raw_text}")
         lines += ["", "Check-ins: " + ", ".join(self.check_ins())]
+        holding = self.holding_traffic()
+        if holding:
+            lines.append("Declared traffic: " + ", ".join(holding))
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 

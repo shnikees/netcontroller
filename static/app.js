@@ -27,11 +27,13 @@ const stats = document.getElementById("stats");
 const scrollBtn = document.getElementById("scrollBtn");
 const clearFilterBtn = document.getElementById("clearFilter");
 const exportBtn = document.getElementById("exportBtn");
+const trafficBtn = document.getElementById("trafficBtn");
 
 const toast = document.getElementById("toast");
 
 let autoScroll = true;
 let filter = null;
+let trafficOnly = false;
 let roster = [];
 let sources = [];
 /* The active tab is a source name, or ALL for the combined view. The first
@@ -42,6 +44,7 @@ const ALL = "\u0000all";
 let activeTab = null;
 const unread = new Map();
 const counts = new Map();
+const holdingTraffic = new Set();
 const entries = [];
 const rows = new Map(); // entry id -> <tr>, so a correction can update in place
 
@@ -61,10 +64,15 @@ function renderRoster() {
     // The sidebar doubles as "who is where": position beats the operator's
     // first name for the space available.
     const detail = station.position || station.name;
+    // A station holding traffic is the thing net control is trying not to
+    // forget, so it is marked here as well as on the line itself.
+    const holding = holdingTraffic.has(station.callsign)
+      ? `<span class="traffic-dot" title="declared traffic">●</span>`
+      : "";
     item.innerHTML =
       `<span><span class="call">${station.callsign}</span>` +
       (detail ? ` <span class="name">${escapeHTML(detail)}</span>` : "") +
-      `</span><span class="count">${count || ""}</span>`;
+      `</span><span class="count">${holding}${count || ""}</span>`;
     item.onclick = () => setFilter(filter === station.callsign ? null : station.callsign);
     rosterEl.appendChild(item);
   }
@@ -85,11 +93,9 @@ function applyFilters() {
   const scoped = sources.length > 1 && activeTab && activeTab !== ALL;
   log.classList.toggle("scoped", !!scoped);
   for (const row of log.children) {
-    row.classList.toggle("hidden-source", !rowInActiveTab(row));
-    row.classList.toggle(
-      "dim",
-      !!filter && row.dataset.callsign !== filter
-    );
+    const hidden = !rowInActiveTab(row) || (trafficOnly && row.dataset.traffic !== "yes");
+    row.classList.toggle("hidden-source", hidden);
+    row.classList.toggle("dim", !!filter && row.dataset.callsign !== filter);
   }
   updateStats();
 }
@@ -192,13 +198,18 @@ function paintRow(row, entry) {
     ? `<span class="src-mark" data-source="${entry.source}">${entry.source}</span>`
     : "";
   row.dataset.source = entry.source || "";
+  // Only the positive is badged. "No traffic" is the common case and marking
+  // it would put a badge on most of the net, which is the same as marking
+  // nothing at all.
+  const traffic = entry.traffic === "yes" ? `<span class="traffic">traffic</span>` : "";
+  row.dataset.traffic = entry.traffic || "";
   row.innerHTML =
     `<td class="time">${fmtTime(entry.timestamp)}${src}${late}</td>` +
     `<td class="call" title="Click to set the callsign">${callsignCellHTML(entry)}</td>` +
-    `<td class="text"></td>` +
+    `<td class="text">${traffic}</td>` +
     `<td class="conf"><span class="bar${pct < 60 ? " low" : ""}"><span style="width:${pct}%"></span></span>${pct}%</td>`;
-  // Transcript text is model output, so set it as text rather than markup.
-  row.querySelector(".text").textContent = entry.raw_text;
+  // Transcript text is model output, so it is appended as text, never markup.
+  row.querySelector(".text").appendChild(document.createTextNode(entry.raw_text));
   row.querySelector(".call").onclick = () => openCorrection(row, entry);
   const suggestion = row.querySelector(".suggestion");
   if (suggestion) {
@@ -218,6 +229,9 @@ function paintRow(row, entry) {
 
 function addEntry(entry, isNew) {
   entries.push(entry);
+  if (entry.traffic === "yes" && entry.matched_callsign) {
+    holdingTraffic.add(entry.matched_callsign);
+  }
   if (entry.matched) {
     counts.set(entry.matched_callsign, (counts.get(entry.matched_callsign) || 0) + 1);
   }
@@ -428,9 +442,15 @@ function updateStats() {
   const stations = new Set(shown.filter((e) => e.matched).map((e) => e.matched_callsign));
   const scope =
     sources.length > 1 && activeTab && activeTab !== ALL ? ` on ${activeTab}` : "";
+  const holding = new Set(
+    shown.filter((e) => e.traffic === "yes" && e.matched_callsign)
+      .map((e) => e.matched_callsign)
+  );
   stats.textContent =
     `${shown.length} transmission${shown.length === 1 ? "" : "s"} · ` +
     `${stations.size} station${stations.size === 1 ? "" : "s"}${scope}`;
+  trafficBtn.hidden = holding.size === 0 && !trafficOnly;
+  trafficBtn.textContent = `Traffic: ${holding.size}`;
 }
 
 scrollBtn.onclick = () => {
@@ -439,6 +459,11 @@ scrollBtn.onclick = () => {
   scrollBtn.textContent = `Auto-scroll: ${autoScroll ? "on" : "off"}`;
 };
 clearFilterBtn.onclick = () => setFilter(null);
+trafficBtn.onclick = () => {
+  trafficOnly = !trafficOnly;
+  trafficBtn.classList.toggle("active", trafficOnly);
+  applyFilters();
+};
 exportBtn.onclick = async () => {
   exportBtn.disabled = true;
   try {

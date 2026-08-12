@@ -157,6 +157,15 @@
     padding: 0.1rem 0.5rem; cursor: pointer;
   }
   .suggestion:hover { background: var(--accent); color: #0d1017; border-style: solid; }
+  /* Traffic. Only the positive is marked -- badging "no traffic" would put a
+     badge on most of the net, which is the same as marking nothing. */
+  .traffic {
+    display: inline-block; margin-right: 0.5rem; padding: 0.05rem 0.45rem;
+    font-size: 0.65rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; vertical-align: 0.15em;
+    background: var(--unmatched); color: #1a1205; border-radius: 4px;
+  }
+  .traffic-dot { color: var(--unmatched); margin-right: 0.35rem; }
   .late-mark {
     display: block; font-size: 0.65rem; color: var(--unmatched);
     text-transform: uppercase; letter-spacing: 0.06em;
@@ -200,6 +209,7 @@
   <div class="spacer"></div>
   <button id="alertBtn" class="active" title="Beep when the pipeline goes unhealthy">Alerts: on</button>
   <button id="scrollBtn" class="active">Auto-scroll: on</button>
+  <button id="trafficBtn" hidden title="Show only transmissions that declared traffic">Traffic: 0</button>
   <button id="clearFilter" hidden>Clear filter</button>
   <button id="exportBtn">Export log</button>
 </header>

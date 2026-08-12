@@ -62,6 +62,7 @@ from resample import Resampler, describe
 from server import Broadcaster, create_app
 from session_writer import SessionWriter, latest_session, read_session
 from stt_worker import SttWorker
+import traffic as traffic_detector
 from transcript_store import TranscriptStore
 from vad_segmenter import VadSegmenter
 from voice_id import EnrolmentAudio, VoiceProfiles
@@ -769,6 +770,7 @@ class Pipeline:
             matched_callsign=result.callsign,
             operator_name=result.name,
             position=result.position,
+            traffic=traffic_detector.detect(segment.text),
             raw_text=segment.text,
             confidence=transcription.confidence,
             match_score=result.score,

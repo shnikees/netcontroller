@@ -22,8 +22,8 @@ SDR / radio ──▶ loopback, line in, or mic ──▶ capture ──▶ VAD 
 ```
 
 ![The dashboard during an event net: each line shows the callsign, the
-position that station is posted at, and the operator's name beside the
-transcript, with a roster sidebar acting as a who-is-where
+position that station is posted at, and the operator's name, with traffic
+declarations badged and a roster sidebar acting as a who-is-where
 board](docs/images/dashboard.png)
 
 Each line carries the callsign, **where that station is posted**, and the
@@ -31,8 +31,9 @@ operator's name. On an event net the position is the actionable half: "need
 medical at my location" is only useful once the line says Mile 8. The sidebar
 doubles as a who-is-where board and lights up as stations are heard from.
 
-Stations the roster cannot match are flagged amber rather than attached to the
-nearest plausible callsign — a wrong callsign is a wrong location. Clicking one
+Lines that declared traffic are badged, and the stations holding it are marked
+in the sidebar — the header count is also a filter. Stations the roster cannot
+match are flagged amber rather than attached to the nearest plausible callsign — a wrong callsign is a wrong location. Clicking one
 sets the right station, and the app
 [learns the correction](#corrections-and-what-the-app-learns-from-them) for
 next time. (Screenshot uses the example roster and synthesised audio from
@@ -433,6 +434,32 @@ a trained speaker-embedding network, which is the honest trade for staying
 installable: it costs recall rather than correctness, since the threshold is
 high and the result is only ever a suggestion.
 
+### Traffic
+
+A net exists partly to move traffic, and "who still has something to pass" is
+otherwise a list somebody keeps in their head. Each line is read for a traffic
+declaration and marked:
+
+```
+[19:04:12] K7XYZ (Turn 7 / Bob): [TRAFFIC] checking in with traffic for net control
+```
+
+The dashboard badges those lines, counts them in the header, marks the holding
+stations in the sidebar, and the count doubles as a filter — one click shows
+only the traffic. The exported log lists who declared traffic at the bottom.
+
+There are three states, not two: **declared traffic**, **explicitly none**
+("no traffic", "nothing for the net"), and **did not say**. Only the first is
+badged. Marking "no traffic" would put a badge on most of the net, which is
+the same as marking nothing.
+
+The trap this is built around is that the *negative* is far more common than
+the positive, so the detector checks for negation before anything else — and
+treats a question ("any traffic for the net?") as net control soliciting
+rather than net control holding. Where the phrasing is genuinely ambiguous it
+records nothing rather than guessing; a badge nobody trusts is worse than no
+badge.
+
 ### When two stations land in one clip
 
 If stations key up inside `vad.silence_ms` of each other, the VAD hands both to
@@ -625,7 +652,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-275 tests, all offline, no audio hardware needed — CI runs them on every push
+300 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

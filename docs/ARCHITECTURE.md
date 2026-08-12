@@ -70,6 +70,7 @@ code. `app.py` wires everything together and owns the process lifecycle.
 | `stt_worker.py` | faster-whisper wrapper |
 | `callsign_match.py` | Normalizer + roster matcher — the domain logic |
 | `clip_split.py` | Splits a clip that caught two stations into separate lines |
+| `traffic.py` | Reads a traffic declaration off a transmission |
 | `feedback.py` | Operator corrections, and the aliases learned from them |
 | `voice_id.py` | Voice profiles, kept enrolment audio, suggestions |
 | `calibrate.py` | Thresholds derived from collected sessions and voices |
@@ -212,6 +213,20 @@ the log will know to doubt it — the same reasoning behind preferring
 "unmatched" to a guess. Splits are refused when there is no qualifying gap, no
 word timings at all, fewer than two distinct roster stations, or when a segment
 would come out too short to be a transmission.
+
+### `traffic.py`
+
+Reads "has traffic", "has none" or "did not say" off a transmission. Three
+states rather than two, because a station saying "nothing for the net" and a
+station not mentioning it are different facts, and only the first means the
+list can stop watching them.
+
+Built around one hazard: **the negative is far more common than the positive**.
+Most stations say "no traffic", so a detector that keyed on the word alone
+would flag the whole net, and net control would learn to ignore the column
+within one session. Negation is checked first, questions ("any traffic for the
+net?") are treated as soliciting rather than declaring, and ambiguity resolves
+to "did not say" — a badge nobody trusts is worse than no badge.
 
 ### `feedback.py`
 
