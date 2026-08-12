@@ -412,4 +412,8 @@ would add a dependency and a migration story for something that gets exported
 to a text file at the end of the night and pasted into a net report.
 
 **Roster is a flat CSV.** It gets edited by a human, in a spreadsheet, before a
-net. Anything richer than `callsign,name` should be justified by a real need.
+net, so columns are read by name and order does not matter. It carries three
+things beyond the callsign, each earning its place: `name`, `position` — where
+the operator is posted, which on an event net is what the callsign is *for* —
+and `sources`, which receivers to expect them on. Anything further should be
+justified by a real need.

@@ -21,16 +21,18 @@ locally.
 SDR / radio ──▶ loopback, line in, or mic ──▶ capture ──▶ VAD ──▶ Whisper ──▶ roster match ──▶ dashboard
 ```
 
-![The dashboard during a net: a tab per receiver with health dots, matched
-stations in green with operator names, an unmatched transmission flagged in
-amber showing the callsign that was heard, and a roster sidebar doubling as a
-check-in list](docs/images/dashboard.png)
+![The dashboard during an event net: each line shows the callsign, the
+position that station is posted at, and the operator's name beside the
+transcript, with a roster sidebar acting as a who-is-where
+board](docs/images/dashboard.png)
 
-One tab per receiver — the repeater is first, because that is the frequency
-being monitored. Matched stations show in green with the operator's name, and
-the roster sidebar lights up as stations check in. The amber line is the
-interesting case: an off-roster visitor, flagged rather than force-matched to
-the nearest roster entry, with the callsign the app actually heard. Clicking it
+Each line carries the callsign, **where that station is posted**, and the
+operator's name. On an event net the position is the actionable half: "need
+medical at my location" is only useful once the line says Mile 8. The sidebar
+doubles as a who-is-where board and lights up as stations are heard from.
+
+Stations the roster cannot match are flagged amber rather than attached to the
+nearest plausible callsign — a wrong callsign is a wrong location. Clicking one
 sets the right station, and the app
 [learns the correction](#corrections-and-what-the-app-learns-from-them) for
 next time. (Screenshot uses the example roster and synthesised audio from
@@ -74,8 +76,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp config.yaml.example config.yaml && cp roster.example.csv roster.csv
 ```
 
-Edit `roster.csv` with the stations you expect (`callsign,name`), then find the
-audio device SDR++/GQRX is feeding:
+Edit `roster.csv` with the stations you expect, then find the audio device
+SDR++/GQRX is feeding:
 
 ```bash
 python app.py --list-devices
@@ -192,6 +194,34 @@ Two settings matter for line in and mic, and not at all for a loopback:
 Sample rate is handled for you. Mics and USB sound cards typically run at
 44.1 kHz, which is resampled to the 16 kHz Whisper wants (via `soxr`, with a
 built-in fallback if it is not installed).
+
+### The roster
+
+Columns are read by name when the file has a header, so the order does not
+matter and anything but `callsign` can be left out:
+
+```csv
+callsign,name,position,sources
+W6ABC,Alice,Net Control,Repeater
+K7XYZ,Bob,Turn 7,Repeater
+N5DEF,Carol,Mile 8,Repeater;Simplex
+KJ6TUV,Frank,Sweep,
+```
+
+**`position`** is where the operator is posted. On an event net this is the
+point of identifying them at all — the callsign is how net control knows where
+a transmission came from — so it shows on every line and in the exported log:
+
+```
+[19:04:12] N5DEF (Mile 8 / Carol): rider down, need medical at my location
+```
+
+**`sources`** is which receivers to expect them on, separated by `;` or `|`
+(a comma would break the CSV). Lines starting with `#` are comments, so a
+station who is away can be commented out rather than deleted.
+
+Files without a header still work and are read as `callsign, name, sources,
+position`.
 
 ### Multiple receivers
 
@@ -595,7 +625,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-267 tests, all offline, no audio hardware needed — CI runs them on every push
+275 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

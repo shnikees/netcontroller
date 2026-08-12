@@ -1,10 +1,14 @@
-callsign,name,sources
-# The third column is optional: which receivers a station is expected on,
-# separated by ; or |. Leave it blank for stations who could be anywhere.
-W6ABC,Alice,Repeater
-K7XYZ,Bob,Repeater
-N5DEF,Carol,Repeater;Simplex
-KD9MNO,Dave,Simplex
-AA4PQ,Erin,Simplex
-KJ6TUV,Frank,
-N0GHI,Grace,
+callsign,name,position,sources
+# Columns are read by name, so the order does not matter and any of them
+# except callsign can be left out. Lines starting with # are ignored.
+#
+# position is where the operator is posted -- on an event net the callsign
+# is how net control knows where a transmission came from.
+# sources is which receivers to expect them on, separated by ; or |.
+W6ABC,Alice,Net Control,Repeater
+K7XYZ,Bob,Turn 7,Repeater
+N5DEF,Carol,Mile 8,Repeater;Simplex
+KD9MNO,Dave,Medical 1,Simplex
+AA4PQ,Erin,Start/Finish,Simplex
+KJ6TUV,Frank,Sweep,
+N0GHI,Grace,Turn 12,

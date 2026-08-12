@@ -55,6 +55,9 @@ class TranscriptEntry:
     """Which receiver heard it, when more than one is configured."""
     escalated: bool = False
     """Re-transcribed by a larger model after the first pass was unsure."""
+    position: str = ""
+    """Where the station is posted. On an event net this is the point of
+    identifying them at all: the callsign says where the traffic came from."""
     suggested_callsign: str | None = None
     """Whose voice this sounds like. A suggestion for the operator, never an
     assignment -- see voice_id.py."""
@@ -85,6 +88,7 @@ class TranscriptStore:
         via_alias: bool = False,
         late: bool = False,
         source: str = "",
+        position: str = "",
     ) -> TranscriptEntry:
         entry = TranscriptEntry(
             id=self._next_id,
@@ -101,6 +105,7 @@ class TranscriptStore:
             via_alias=via_alias,
             late=late,
             source=source,
+            position=position,
         )
         self._next_id += 1
         # Keep the log in transmission order. A clip recovered from the disk
@@ -139,7 +144,11 @@ class TranscriptStore:
         return next((e for e in self.entries if e.id == entry_id), None)
 
     def correct(
-        self, entry_id: int, callsign: str, operator_name: str = ""
+        self,
+        entry_id: int,
+        callsign: str,
+        operator_name: str = "",
+        position: str = "",
     ) -> TranscriptEntry | None:
         """Apply an operator correction to one entry.
 
@@ -154,6 +163,7 @@ class TranscriptStore:
         entry.matched = True
         entry.matched_callsign = callsign
         entry.operator_name = operator_name
+        entry.position = position
         entry.corrected = True
         entry.unmatched_reason = ""
         return entry
@@ -179,6 +189,7 @@ class TranscriptStore:
         match_score: float,
         candidate: str | None,
         unmatched_reason: str,
+        position: str = "",
     ) -> TranscriptEntry | None:
         """Replace a line with the result of a second, better transcription.
 
@@ -192,6 +203,7 @@ class TranscriptStore:
         entry.matched = matched
         entry.matched_callsign = matched_callsign
         entry.operator_name = operator_name
+        entry.position = position
         entry.confidence = round(confidence, 3)
         entry.match_score = round(match_score, 1)
         entry.candidate = candidate
@@ -232,8 +244,12 @@ class TranscriptStore:
         multi = len({e.source for e in self.entries if e.source}) > 1
         for entry in self.entries:
             who = entry.matched_callsign if entry.matched else "UNMATCHED"
-            if entry.matched and entry.operator_name:
-                who = f"{who} ({entry.operator_name})"
+            if entry.matched:
+                # Position first: on an event net that is what the reader is
+                # looking for, and the name is the detail.
+                detail = " / ".join(x for x in (entry.position, entry.operator_name) if x)
+                if detail:
+                    who = f"{who} ({detail})"
             if entry.corrected:
                 was = entry.original_callsign or "unmatched"
                 who = f"{who} [corrected from {was}]"

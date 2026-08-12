@@ -370,6 +370,53 @@ def test_stations_already_heard_drop_down_the_order() -> None:
     assert terms.index("K7XYZ") < terms.index("W6ABC")
 
 
+def test_position_is_carried_from_the_roster_to_the_match() -> None:
+    # On an event net the callsign is a location, so the match has to bring the
+    # position with it or the operator is translating callsigns in their head.
+    matcher = CallsignMatcher(
+        roster=[RosterEntry("W6ABC", "Alice", position="Turn 7")]
+    )
+    result = matcher.match("whiskey six alpha bravo charlie, car off at my corner")
+    assert result.matched
+    assert result.position == "Turn 7"
+
+
+def test_columns_are_read_by_name_when_there_is_a_header(tmp_path) -> None:
+    # A roster is edited in a spreadsheet by a human; column order should not
+    # be something they have to get right.
+    path = tmp_path / "roster.csv"
+    path.write_text(
+        "callsign,position,sources,name\nW6ABC,Medical 1,Repeater,Alice\n",
+        encoding="utf-8",
+    )
+    entry = load_roster(path)[0]
+    assert (entry.callsign, entry.name, entry.position) == ("W6ABC", "Alice", "Medical 1")
+    assert entry.sources == ("Repeater",)
+
+
+def test_a_roster_without_a_header_keeps_the_old_column_order(tmp_path) -> None:
+    # Files written before positions existed must keep working.
+    path = tmp_path / "roster.csv"
+    path.write_text("W6ABC,Alice,Repeater\n", encoding="utf-8")
+    entry = load_roster(path)[0]
+    assert entry.name == "Alice"
+    assert entry.sources == ("Repeater",)
+    assert entry.position == ""
+
+
+def test_missing_columns_are_simply_absent(tmp_path) -> None:
+    path = tmp_path / "roster.csv"
+    path.write_text("callsign,position\nW6ABC,Turn 7\n", encoding="utf-8")
+    entry = load_roster(path)[0]
+    assert entry.position == "Turn 7"
+    assert entry.name == "" and entry.sources == ()
+
+
+def test_the_shipped_example_roster_has_positions() -> None:
+    entries = {e.callsign: e for e in load_roster("roster.example.csv")}
+    assert entries["K7XYZ"].position == "Turn 7"
+
+
 def test_roster_csv_can_assign_stations_to_frequencies(tmp_path) -> None:
     path = tmp_path / "roster.csv"
     path.write_text(

@@ -58,9 +58,12 @@ function renderRoster() {
     item.className = "roster-item";
     if (count > 0) item.classList.add("checked-in");
     if (filter === station.callsign) item.classList.add("selected");
+    // The sidebar doubles as "who is where": position beats the operator's
+    // first name for the space available.
+    const detail = station.position || station.name;
     item.innerHTML =
       `<span><span class="call">${station.callsign}</span>` +
-      (station.name ? ` <span class="name">${station.name}</span>` : "") +
+      (detail ? ` <span class="name">${escapeHTML(detail)}</span>` : "") +
       `</span><span class="count">${count || ""}</span>`;
     item.onclick = () => setFilter(filter === station.callsign ? null : station.callsign);
     rosterEl.appendChild(item);
@@ -159,13 +162,20 @@ function callsignCellHTML(entry) {
       : "";
     return `<span class="call-text">UNMATCHED</span><span class="reason">${why}</span>${suggestion}`;
   }
-  const name = entry.operator_name ? `<span class="name">${entry.operator_name}</span>` : "";
+  // Position above name: on an event net the callsign is a location, and
+  // "Turn 7" is what the reader needs at a glance. The name is the detail.
+  const position = entry.position
+    ? `<span class="position">${escapeHTML(entry.position)}</span>`
+    : "";
+  const name = entry.operator_name
+    ? `<span class="name">${escapeHTML(entry.operator_name)}</span>`
+    : "";
   const mark = entry.corrected
     ? `<span class="corrected-mark">✓ corrected${entry.original_callsign ? ` from ${entry.original_callsign}` : ""}</span>`
     : entry.via_alias
       ? `<span class="corrected-mark">✓ learned</span>`
       : "";
-  return `<span class="call-text">${entry.matched_callsign}</span>${name}${mark}`;
+  return `<span class="call-text">${entry.matched_callsign}</span>${position}${name}${mark}`;
 }
 
 function paintRow(row, entry) {

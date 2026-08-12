@@ -22,6 +22,8 @@ from datetime import datetime
 
 import pytest
 
+from pathlib import Path
+
 from transcript_store import TranscriptStore
 
 
@@ -121,3 +123,50 @@ def test_a_suggested_station_is_not_counted_as_a_check_in() -> None:
     entry = add(store, None, "back to you")
     store.suggest(entry.id, "KJ6TUV", 0.9)
     assert store.check_ins() == []
+
+
+# --------------------------------------------------------------------------
+# Positions
+# --------------------------------------------------------------------------
+
+
+def test_position_is_recorded_on_the_line() -> None:
+    store = TranscriptStore()
+    entry = store.add(
+        started_at=datetime(2026, 4, 1, 19, 0, 0),
+        matched=True,
+        matched_callsign="K7XYZ",
+        operator_name="Bob",
+        position="Turn 7",
+        raw_text="car off at my corner",
+        confidence=0.9,
+        match_score=100.0,
+        clip_duration=3.0,
+    )
+    assert entry.position == "Turn 7"
+
+
+def test_the_exported_log_leads_with_position() -> None:
+    # This file gets read after the event by somebody reconstructing what
+    # happened where.
+    store = TranscriptStore()
+    store.add(
+        started_at=datetime(2026, 4, 1, 19, 0, 0),
+        matched=True,
+        matched_callsign="K7XYZ",
+        operator_name="Bob",
+        position="Turn 7",
+        raw_text="car off at my corner",
+        confidence=0.9,
+        match_score=100.0,
+        clip_duration=3.0,
+    )
+    text = store.export_text(Path("/tmp") / "position-log.txt").read_text()
+    assert "K7XYZ (Turn 7 / Bob): car off at my corner" in text
+
+
+def test_a_correction_brings_the_position_with_it() -> None:
+    store = TranscriptStore()
+    entry = add(store, None, "car off at my corner")
+    store.correct(entry.id, "K7XYZ", "Bob", "Turn 7")
+    assert entry.position == "Turn 7"

@@ -83,6 +83,12 @@
   .time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 0.9rem; }
   .call { font-weight: 700; color: var(--matched); white-space: nowrap; }
   .call .name { display: block; font-weight: 400; font-size: 0.8rem; color: var(--muted); }
+  /* Where the station is posted. Deliberately louder than the operator's
+     name: on an event net this is the actionable half of the callsign. */
+  .call .position {
+    display: block; font-weight: 600; font-size: 0.8rem; color: var(--accent);
+    letter-spacing: 0.01em;
+  }
   .unmatched .call { color: var(--unmatched); font-weight: 600; }
   .unmatched td { background: rgba(240, 180, 95, 0.07); }
   .reason { display: block; font-size: 0.75rem; color: var(--muted); font-weight: 400; }

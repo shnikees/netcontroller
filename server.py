@@ -104,7 +104,8 @@ def create_app(
             {
                 "entries": store.all(),
                 "roster": [
-                    {"callsign": e.callsign, "name": e.name} for e in roster
+                    {"callsign": e.callsign, "name": e.name, "position": e.position}
+                    for e in roster
                 ],
                 "check_ins": store.check_ins(),
                 "sources": sources or [],
@@ -135,7 +136,7 @@ def create_app(
         candidate = entry.candidate
         raw_text = entry.raw_text
         station = by_callsign[callsign]
-        store.correct(payload.entry_id, callsign, station.name)
+        store.correct(payload.entry_id, callsign, station.name, station.position)
 
         if feedback is not None:
             record_correction(

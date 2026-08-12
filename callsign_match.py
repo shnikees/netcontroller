@@ -162,6 +162,12 @@ LOOSE_CALLSIGN_RE = re.compile(r"\b([A-Z]{1,3}[0-9][A-Z]{0,4})\b")
 class RosterEntry:
     callsign: str
     name: str = ""
+    position: str = ""
+    """Where this operator is posted -- "Turn 7", "Mile 8", "Medical 1".
+
+    On an event net the callsign *is* a location: knowing who transmitted is
+    knowing where it came from, and "car off, need a tow" is only actionable
+    once you know which corner it came from."""
     sources: tuple[str, ...] = ()
     """Which receivers this station is expected on; empty means all of them.
 
@@ -180,6 +186,8 @@ class MatchResult:
     matched: bool
     callsign: str | None = None
     name: str = ""
+    position: str = ""
+    """Where the matched station is posted; empty when unmatched or unset."""
     score: float = 0.0
     candidate: str | None = None
     """The callsign-shaped token we matched from, before roster correction."""
@@ -199,35 +207,73 @@ class MatchResult:
 # --------------------------------------------------------------------------
 
 
+HEADER_NAMES = {"callsign", "call", "call_sign"}
+COLUMNS = ("callsign", "name", "sources", "position")
+"""Positional order when there is no header row, kept for existing files."""
+
+
 def load_roster(path: str | Path) -> list[RosterEntry]:
-    """Load a `callsign,name` CSV. A header row is optional; name is optional."""
+    """Load a roster CSV.
+
+    Columns are read by name when the file has a header, so any of these work
+    and the order does not matter:
+
+        callsign,name
+        callsign,name,position
+        callsign,position,sources,name
+
+    Without a header the order is assumed to be callsign, name, sources,
+    position. Lines starting with "#" are comments -- rosters get annotated by
+    hand, and a note about who is away should not become a station.
+    """
     entries: list[RosterEntry] = []
     seen: set[str] = set()
+    columns: dict[str, int] | None = None
+
     with open(path, newline="", encoding="utf-8") as fh:
         for row in csv.reader(fh):
-            if not row or not row[0].strip():
+            if not row or not row[0].strip() or row[0].lstrip().startswith("#"):
                 continue
-            # Rosters get annotated by hand -- a commented-out station, a note
-            # about who is away. Without this those lines become stations.
-            if row[0].lstrip().startswith("#"):
+
+            first = row[0].strip().lower()
+            if columns is None and first in HEADER_NAMES:
+                columns = {
+                    cell.strip().lower(): index
+                    for index, cell in enumerate(row)
+                    if cell.strip()
+                }
                 continue
-            callsign = row[0].strip().upper()
-            if callsign in {"CALLSIGN", "CALL", "CALL_SIGN"}:
-                continue  # header
-            if callsign in seen:
+            if first in HEADER_NAMES:
+                continue  # a repeated header, pasted in from another file
+
+            def field(name: str) -> str:
+                if columns is not None:
+                    index = columns.get(name)
+                else:
+                    index = COLUMNS.index(name) if name in COLUMNS else None
+                if index is None or index >= len(row):
+                    return ""
+                return row[index].strip()
+
+            callsign = field("callsign").upper()
+            if not callsign or callsign in seen:
                 continue
             seen.add(callsign)
-            name = row[1].strip() if len(row) > 1 else ""
-            # Optional third column: the frequencies this station is expected
-            # on, separated by ";" or "|" (a comma would break the CSV).
-            raw_sources = row[2].strip() if len(row) > 2 else ""
+
+            # Frequencies are separated by ";" or "|" -- a comma would break
+            # the CSV.
             sources = tuple(
                 part.strip()
-                for part in re.split(r"[;|]", raw_sources)
+                for part in re.split(r"[;|]", field("sources"))
                 if part.strip()
             )
             entries.append(
-                RosterEntry(callsign=callsign, name=name, sources=sources)
+                RosterEntry(
+                    callsign=callsign,
+                    name=field("name"),
+                    position=field("position"),
+                    sources=sources,
+                )
             )
     return entries
 
@@ -636,6 +682,7 @@ class CallsignMatcher:
                 matched=True,
                 callsign=entry.callsign,
                 name=entry.name,
+                position=entry.position,
                 score=100.0,
                 candidate=candidate,
                 via_alias=True,
@@ -679,6 +726,7 @@ class CallsignMatcher:
         base.matched = True
         base.callsign = entry.callsign
         base.name = entry.name
+        base.position = entry.position
         return base
 
 
