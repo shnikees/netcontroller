@@ -110,6 +110,31 @@ class TranscriptStore:
         self.entries.insert(position, entry)
         return entry
 
+    def restore(self, records: list[dict]) -> int:
+        """Rebuild the log from a session file, so a restart continues it.
+
+        Corrections replace the line they correct: what is restored is the log
+        as it stood, not a replay of how it got there. Numbering picks up where
+        the interrupted session left off, so the ids in the file stay valid.
+        """
+        by_id: dict[int, dict] = {}
+        for record in records:
+            if record.get("type") not in ("entry", "correction"):
+                continue
+            entry_id = int(record.get("id", 0))
+            if entry_id:
+                by_id[entry_id] = record
+
+        known = set(TranscriptEntry.__dataclass_fields__)
+        for entry_id in sorted(by_id):
+            data = {k: v for k, v in by_id[entry_id].items() if k in known}
+            data["id"] = entry_id
+            self.entries.append(TranscriptEntry(**data))
+            self._next_id = max(self._next_id, entry_id + 1)
+
+        self.entries.sort(key=lambda e: (e.timestamp, e.id))
+        return len(by_id)
+
     def get(self, entry_id: int) -> TranscriptEntry | None:
         return next((e for e in self.entries if e.id == entry_id), None)
 

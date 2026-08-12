@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from session_writer import SessionWriter, read_session
+from session_writer import SessionWriter, latest_session, read_session
 from transcript_store import TranscriptStore
 
 START = datetime(2026, 4, 1, 19, 0, 0)
@@ -166,3 +166,93 @@ def test_close_leaves_a_complete_readable_log(session) -> None:
     text = writer.text_path.read_text(encoding="utf-8")
     assert "1 transmissions" in text
     assert "Check-ins: W6ABC" in text
+
+
+# --------------------------------------------------------------------------
+# Resuming an interrupted net
+#
+# A crash mid-net should leave one log for the net, not two halves somebody
+# has to staple together afterwards.
+# --------------------------------------------------------------------------
+
+
+def test_restoring_rebuilds_the_log(tmp_path) -> None:
+    writer = SessionWriter(tmp_path / "t", TranscriptStore(), started_at=START)
+    store = writer.store
+    writer.start()
+    writer.append(add(store, "W6ABC", "checking in"))
+    writer.append(add(store, "K7XYZ", "no traffic", minutes=1))
+
+    restarted = TranscriptStore()
+    assert restarted.restore(read_session(writer.jsonl_path)) == 2
+    assert [e.matched_callsign for e in restarted.entries] == ["W6ABC", "K7XYZ"]
+    assert restarted.check_ins() == ["W6ABC", "K7XYZ"]
+
+
+def test_numbering_continues_after_a_restore(tmp_path) -> None:
+    # Reusing an id would make a correction hit the wrong line.
+    writer = SessionWriter(tmp_path / "t", TranscriptStore(), started_at=START)
+    writer.start()
+    writer.append(add(writer.store, "W6ABC", "first"))
+    writer.append(add(writer.store, "K7XYZ", "second", minutes=1))
+
+    restarted = TranscriptStore()
+    restarted.restore(read_session(writer.jsonl_path))
+    fresh = add(restarted, "N5DEF", "after the restart", minutes=2)
+    assert fresh.id == 3
+
+
+def test_a_correction_survives_the_restart(tmp_path) -> None:
+    writer = SessionWriter(tmp_path / "t", TranscriptStore(), started_at=START)
+    writer.start()
+    entry = add(writer.store, None, "unreadable")
+    writer.append(entry)
+    writer.store.correct(entry.id, "KJ6TUV", "Frank")
+    writer.record_correction(entry)
+
+    restarted = TranscriptStore()
+    restarted.restore(read_session(writer.jsonl_path))
+    # What is restored is the log as it stood, not a replay of how it got there.
+    assert len(restarted.entries) == 1
+    assert restarted.entries[0].matched_callsign == "KJ6TUV"
+    assert restarted.entries[0].corrected is True
+
+
+def test_resuming_appends_to_the_same_files(tmp_path) -> None:
+    first = SessionWriter(tmp_path / "t", TranscriptStore(), started_at=START)
+    first.start()
+    first.append(add(first.store, "W6ABC", "before the crash"))
+
+    restarted = TranscriptStore()
+    restarted.restore(read_session(first.jsonl_path))
+    second = SessionWriter(tmp_path / "t", restarted, resume=first.jsonl_path)
+    assert second.start() == first.jsonl_path
+    second.append(add(restarted, "K7XYZ", "after the restart", minutes=1))
+
+    text = first.text_path.read_text(encoding="utf-8")
+    assert "before the crash" in text and "after the restart" in text
+    assert len(list((tmp_path / "t").glob("*.jsonl"))) == 1
+
+
+def test_resuming_records_that_it_resumed(tmp_path) -> None:
+    first = SessionWriter(tmp_path / "t", TranscriptStore(), started_at=START)
+    first.start()
+    SessionWriter(tmp_path / "t", TranscriptStore(), resume=first.jsonl_path).start()
+    assert any(r["type"] == "resumed" for r in read_session(first.jsonl_path))
+
+
+def test_latest_session_finds_the_newest(tmp_path) -> None:
+    directory = tmp_path / "t"
+    directory.mkdir()
+    import os, time
+
+    for index, name in enumerate(("net-1.jsonl", "net-2.jsonl")):
+        path = directory / name
+        path.write_text("", encoding="utf-8")
+        os.utime(path, (time.time() + index, time.time() + index))
+    assert latest_session(directory).name == "net-2.jsonl"
+
+
+def test_nothing_to_resume_from_is_not_an_error(tmp_path) -> None:
+    assert latest_session(tmp_path / "nope") is None
+    assert TranscriptStore().restore([]) == 0

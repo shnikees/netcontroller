@@ -29,7 +29,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from voice_id import VoiceProfiles, embed, similarity
+from voice_id import EnrolmentAudio, VoiceProfiles, embed, similarity
 
 RATE = 16_000
 
@@ -190,3 +190,157 @@ def test_known_lists_only_usable_profiles(profiles: VoiceProfiles) -> None:
     enrol_all(profiles, "W6ABC", alice)
     profiles.enrol("K7XYZ", bob(1))  # only one clip
     assert profiles.known == ["W6ABC"]
+
+
+# --------------------------------------------------------------------------
+# Keeping the audio profiles were built from
+#
+# The point of this is a future embedder swap: vectors from two models mean
+# nothing to each other, so without the clips, changing the model throws away
+# every profile. It cannot be added retroactively, which is why it defaults on.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def store(tmp_path) -> EnrolmentAudio:
+    return EnrolmentAudio(tmp_path / "voice_audio", per_station=3, max_seconds=2.0)
+
+
+def test_enrolling_keeps_the_clip(store: EnrolmentAudio, tmp_path) -> None:
+    profiles = VoiceProfiles(audio=store, min_enrolments=1)
+    profiles.enrol("W6ABC", alice(1))
+
+    assert store.stations() == ["W6ABC"]
+    assert len(store.clips("W6ABC")) == 1
+
+
+def test_kept_audio_round_trips(store: EnrolmentAudio) -> None:
+    original = alice(1)[: 16_000 * 2]
+    store.save("W6ABC", original)
+
+    recovered = store.clips("W6ABC")[0]
+    assert len(recovered) == len(original)
+    # 16-bit quantisation, so close rather than identical.
+    assert float(np.abs(recovered - original).max()) < 0.001
+
+
+def test_only_the_most_recent_clips_are_kept(store: EnrolmentAudio) -> None:
+    # A voice heard last week is more use than one from six months ago.
+    for seed in range(6):
+        store.save("W6ABC", alice(seed))
+    assert len(store.clips("W6ABC")) == 3
+
+
+def test_long_clips_are_trimmed(store: EnrolmentAudio) -> None:
+    # This lives on an SD card; a rag-chew must not cost 40 MB.
+    store.save("W6ABC", voice(210, [(800, 1.0)], seconds=30))
+    assert len(store.clips("W6ABC")[0]) <= 16_000 * 2
+
+
+def test_a_callsign_cannot_escape_the_directory(store: EnrolmentAudio, tmp_path) -> None:
+    # Never trust a roster file with a path.
+    store.save("../../etc/W6ABC", alice(1))
+    assert not (tmp_path / "etc").exists()
+    assert store.stations()
+
+
+def test_retention_off_writes_nothing(tmp_path) -> None:
+    profiles = VoiceProfiles(audio=None, min_enrolments=1)
+    assert profiles.enrol("W6ABC", alice(1))
+    assert not (tmp_path / "voice_audio").exists()
+
+
+def test_an_unwritable_directory_does_not_stop_enrolment(tmp_path) -> None:
+    blocker = tmp_path / "in-the-way"
+    blocker.write_text("not a directory")
+    profiles = VoiceProfiles(
+        audio=EnrolmentAudio(blocker / "voice_audio"), min_enrolments=1
+    )
+    # The profile is still learned; only the keeping failed.
+    assert profiles.enrol("W6ABC", alice(1))
+    assert "W6ABC" in profiles.profiles
+
+
+# --------------------------------------------------------------------------
+# Rebuilding -- what the retention is for
+# --------------------------------------------------------------------------
+
+
+def test_rebuilding_reproduces_the_profiles(store: EnrolmentAudio) -> None:
+    profiles = VoiceProfiles(audio=store, min_enrolments=1)
+    for seed in (1, 2):
+        profiles.enrol("W6ABC", alice(seed))
+        profiles.enrol("K7XYZ", bob(seed))
+
+    before = {c: p.centroid.copy() for c, p in profiles.profiles.items()}
+    profiles.profiles.clear()
+    stations, clips = profiles.rebuild()
+
+    assert stations == 2 and clips == 4
+    for callsign, centroid in before.items():
+        assert similarity(profiles.profiles[callsign].centroid, centroid) > 0.999
+
+
+def test_rebuilding_still_identifies_the_right_station(store: EnrolmentAudio) -> None:
+    profiles = VoiceProfiles(audio=store, min_enrolments=1)
+    for seed in (1, 2, 3):
+        profiles.enrol("W6ABC", alice(seed))
+        profiles.enrol("K7XYZ", bob(seed))
+
+    profiles.profiles.clear()
+    profiles.rebuild()
+
+    suggestion = profiles.identify(alice(42))
+    assert suggestion is not None and suggestion.callsign == "W6ABC"
+
+
+def test_rebuilding_survives_an_embedder_change(store: EnrolmentAudio, monkeypatch) -> None:
+    """The scenario this whole feature exists for.
+
+    A new embedder returns vectors of a different size and meaning. Every
+    stored profile is void -- but the audio is not, so the profiles come back
+    in one pass instead of weeks of re-enrolment.
+    """
+    profiles = VoiceProfiles(audio=store, min_enrolments=1)
+    for seed in (1, 2):
+        profiles.enrol("W6ABC", alice(seed))
+        profiles.enrol("K7XYZ", bob(seed))
+    assert profiles.profiles["W6ABC"].centroid.shape == (24,)
+
+    import voice_id
+
+    def different_embedder(audio, rate=16_000):
+        # Stands in for ECAPA: a different size, different meaning, same job.
+        base = np.asarray(audio, dtype=np.float32)
+        if len(base) < 16_000 // 2:
+            return None
+        vector = np.array(
+            [float(np.std(c)) for c in np.array_split(base, 192)], dtype=np.float32
+        )
+        norm = np.linalg.norm(vector)
+        return vector / norm if norm > 1e-9 else None
+
+    monkeypatch.setattr(voice_id, "embed", different_embedder)
+    stations, clips = profiles.rebuild()
+
+    assert stations == 2 and clips == 4
+    assert profiles.profiles["W6ABC"].centroid.shape == (192,)
+
+
+def test_rebuilding_without_kept_audio_does_nothing() -> None:
+    profiles = VoiceProfiles(min_enrolments=1)
+    assert profiles.rebuild() == (0, 0)
+
+
+def test_deleting_a_stations_clips_removes_it_on_rebuild(store: EnrolmentAudio) -> None:
+    # How a profile poisoned by a wrong match gets fixed.
+    profiles = VoiceProfiles(audio=store, min_enrolments=1)
+    profiles.enrol("W6ABC", alice(1))
+    profiles.enrol("K7XYZ", bob(1))
+
+    for path in (store.directory / "K7XYZ").glob("*.wav"):
+        path.unlink()
+    profiles.rebuild()
+
+    assert "W6ABC" in profiles.profiles
+    assert "K7XYZ" not in profiles.profiles

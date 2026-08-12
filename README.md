@@ -369,6 +369,14 @@ every line you correct by hand, is a labelled (audio, callsign) pair. Profiles
 persist in `voices.json`, so the system knows more voices every week without
 anyone doing anything extra.
 
+The clips behind each profile are kept too (`voice.keep_audio`, on by
+default). Embeddings from two different models are not comparable, so without
+the audio, changing the embedder later would void every profile and enrolment
+would start from nothing. With it, `python tools/rebuild_voices.py` re-embeds
+everything in a single pass — and `--compare` scores two embedders on
+identical clips, which is the only fair way to test one. Budget about a
+megabyte per station.
+
 **Suggestions only, and only on unmatched lines.** An unmatched row shows
 `sounds like KJ6TUV?` — one click confirms it, through the same correction path
 as any manual fix, which also learns the alias *and* the voice. A voice match
@@ -499,6 +507,16 @@ rather have the few milliseconds back than the guarantee.
 **Export log** still works for an on-demand copy, and a clean exit still writes
 a final one — but neither is now the thing standing between you and a lost net.
 
+If the app does go down mid-net, restart it with `--resume`:
+
+```bash
+python app.py --resume
+```
+
+It reloads the interrupted log, remembers who had already checked in, and keeps
+writing to the *same* files — so the net ends with one record rather than two
+halves to staple together. Pass a filename to resume a specific session.
+
 ## Watchdog, logging, and alerting
 
 The failure worth guarding against is not a crash — it is the pipeline that
@@ -569,7 +587,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-248 tests, all offline, no audio hardware needed — CI runs them on every push
+267 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

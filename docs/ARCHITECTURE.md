@@ -71,7 +71,7 @@ code. `app.py` wires everything together and owns the process lifecycle.
 | `callsign_match.py` | Normalizer + roster matcher — the domain logic |
 | `clip_split.py` | Splits a clip that caught two stations into separate lines |
 | `feedback.py` | Operator corrections, and the aliases learned from them |
-| `voice_id.py` | Voice profiles, and suggestions for unmatched lines |
+| `voice_id.py` | Voice profiles, kept enrolment audio, suggestions |
 | `calibrate.py` | Thresholds derived from collected sessions and voices |
 | `transcript_store.py` | Session log, ordering, CSV/text export |
 | `session_writer.py` | Streams the session to disk as it happens |

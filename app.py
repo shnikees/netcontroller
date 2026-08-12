@@ -60,11 +60,11 @@ from health import ERROR, OK, WARNING, HealthFleet, HealthMonitor
 from logging_setup import setup_logging
 from resample import Resampler, describe
 from server import Broadcaster, create_app
-from session_writer import SessionWriter
+from session_writer import SessionWriter, latest_session, read_session
 from stt_worker import SttWorker
 from transcript_store import TranscriptStore
 from vad_segmenter import VadSegmenter
-from voice_id import VoiceProfiles
+from voice_id import EnrolmentAudio, VoiceProfiles
 
 log = logging.getLogger("net-stt")
 
@@ -366,6 +366,15 @@ class Pipeline:
             min_similarity=config.voice.min_similarity,
             margin=config.voice.margin,
             min_enrolments=config.voice.min_enrolments,
+            audio=(
+                EnrolmentAudio(
+                    config.voice.audio_dir,
+                    per_station=config.voice.audio_per_station,
+                    max_seconds=config.voice.audio_max_seconds,
+                )
+                if config.voice.keep_audio
+                else None
+            ),
         )
         # Recent clip audio, so a correction arriving a minute later can still
         # enrol the voice it belongs to.
@@ -865,10 +874,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="with --file: process the recording, write the transcript, exit",
     )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="latest",
+        metavar="SESSION",
+        help="continue an interrupted net: reload its log and keep writing to "
+        "it. Defaults to the most recent session.",
+    )
     return parser.parse_args(argv)
 
 
-async def run(config: Config, wav_path: str | None, batch: bool = False) -> None:
+async def run(
+    config: Config,
+    wav_path: str | None,
+    batch: bool = False,
+    resume: str | None = None,
+) -> None:
     roster = load_roster(config.roster.path)
     log.info("Loaded %d roster entries from %s", len(roster), config.roster.path)
 
@@ -890,14 +912,43 @@ async def run(config: Config, wav_path: str | None, batch: bool = False) -> None
     store = TranscriptStore()
     broadcaster = Broadcaster()
 
+    # Resuming: reload the interrupted log and keep writing to the same files,
+    # so a crash mid-net leaves one record rather than two halves.
+    resume_path = None
+    if resume:
+        resume_path = (
+            latest_session(config.transcripts.dir)
+            if resume == "latest"
+            else Path(resume)
+        )
+        if resume_path is None or not resume_path.exists():
+            log.warning(
+                "Nothing to resume from in %s; starting a new session",
+                config.transcripts.dir,
+            )
+            resume_path = None
+        else:
+            restored = store.restore(read_session(resume_path))
+            log.info("Resumed %d line(s) from %s", restored, resume_path.name)
+            if restored:
+                log.info(
+                    "  %d station(s) already checked in: %s",
+                    len(store.check_ins()),
+                    ", ".join(store.check_ins()),
+                )
+
     session = None
     if config.transcripts.live:
         session = SessionWriter(
-            config.transcripts.dir, store, fsync=config.transcripts.fsync
+            config.transcripts.dir,
+            store,
+            fsync=config.transcripts.fsync,
+            resume=resume_path,
         )
         path = session.start()
         if path:
-            log.info("Writing this session to %s (and the .txt beside it)", path)
+            verb = "Continuing" if resume_path else "Writing this session to"
+            log.info("%s %s (and the .txt beside it)", verb, path)
     fleet = HealthFleet(
         stall_after_s=config.health.stall_after_s,
         silence_after_s=config.health.silence_after_s,
@@ -1021,7 +1072,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
-        asyncio.run(run(config, args.file, batch=args.batch))
+        asyncio.run(run(config, args.file, batch=args.batch, resume=args.resume))
     except KeyboardInterrupt:
         pass
     return 0

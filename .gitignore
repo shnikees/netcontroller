@@ -13,3 +13,4 @@ logs/
 spill/
 transcripts/
 voices.json
+voice_audio/

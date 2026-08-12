@@ -64,11 +64,14 @@ class SessionWriter:
         *,
         fsync: bool = True,
         started_at: datetime | None = None,
+        resume: str | Path | None = None,
     ) -> None:
         self.directory = Path(directory)
         self.store = store
         self.fsync = fsync
         self.started_at = started_at or datetime.now()
+        self.resume = Path(resume) if resume else None
+        """An existing session to continue, rather than starting a new file."""
         self.jsonl_path: Path | None = None
         self.text_path: Path | None = None
         self.entries_written = 0
@@ -77,17 +80,31 @@ class SessionWriter:
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> Path | None:
-        """Create the session files. Returns the JSONL path, or None if disabled
-        by a filesystem that will not take it."""
-        stamp = self.started_at.strftime("%Y%m%d-%H%M%S")
+        """Open the session files. Returns the JSONL path, or None if disabled
+        by a filesystem that will not take it.
+
+        Resuming appends to the interrupted session rather than opening a new
+        one, so a crash and restart leave one log for the net rather than two
+        halves somebody has to staple together afterwards.
+        """
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
-            self.jsonl_path = self.directory / f"net-{stamp}.jsonl"
-            self.text_path = self.directory / f"net-{stamp}.txt"
-            self._write_line({"type": "session", "started_at": self.started_at.isoformat()})
+            if self.resume is not None:
+                self.jsonl_path = self.resume
+                self.text_path = self.resume.with_suffix(".txt")
+                self._write_line(
+                    {"type": "resumed", "at": self.started_at.isoformat()}
+                )
+            else:
+                stamp = self.started_at.strftime("%Y%m%d-%H%M%S")
+                self.jsonl_path = self.directory / f"net-{stamp}.jsonl"
+                self.text_path = self.directory / f"net-{stamp}.txt"
+                self._write_line(
+                    {"type": "session", "started_at": self.started_at.isoformat()}
+                )
             return self.jsonl_path
         except OSError as exc:
-            self._disable("could not create session files", exc)
+            self._disable("could not open session files", exc)
             return None
 
     def close(self) -> None:
@@ -145,6 +162,15 @@ class SessionWriter:
         if not self._failed:
             log.error("Session writing disabled -- %s: %s", what, exc)
         self._failed = True
+
+
+def latest_session(directory: str | Path) -> Path | None:
+    """The most recently written session file, or None if there are none."""
+    directory = Path(directory)
+    if not directory.exists():
+        return None
+    sessions = sorted(directory.glob("net-*.jsonl"), key=lambda p: p.stat().st_mtime)
+    return sessions[-1] if sessions else None
 
 
 def read_session(path: str | Path) -> list[dict]:

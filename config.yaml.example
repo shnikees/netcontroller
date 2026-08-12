@@ -155,6 +155,17 @@ voice:
   # Clips kept in memory so a correction arriving a minute later can still
   # enrol the voice it belongs to.
   recent_audio: 60
+  # Keep the audio each profile was built from. Embeddings from two different
+  # models are not comparable, so without this, changing the embedder later
+  # voids every profile and enrolment starts from nothing. With it, that is a
+  # re-embed pass of minutes: tools/rebuild_voices.py.
+  #
+  # It cannot be applied retroactively to enrolments already made, which is why
+  # it is on by default. Roughly a megabyte per station at these settings.
+  keep_audio: true
+  audio_dir: voice_audio
+  audio_per_station: 6
+  audio_max_seconds: 5.0
 
 roster:
   path: roster.csv

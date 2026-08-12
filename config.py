@@ -197,6 +197,19 @@ class VoiceConfig:
     """Clips kept in memory so an operator correction can enrol its audio --
     corrections are the best labels there are."""
 
+    keep_audio: bool = True
+    """Keep the clips each profile was built from.
+
+    Embeddings from two different models are not comparable, so without the
+    audio, changing the embedder voids every profile and enrolment starts over.
+    With it, that is a re-embed pass of minutes. Cannot be applied
+    retroactively, which is why it defaults to on."""
+    audio_dir: str = "voice_audio"
+    audio_per_station: int = 6
+    audio_max_seconds: float = 5.0
+    """About a megabyte per station at these defaults; a hundred-station
+    roster costs roughly a hundred megabytes of SD card."""
+
 
 @dataclass
 class RosterConfig:

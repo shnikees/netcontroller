@@ -45,6 +45,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -198,6 +200,92 @@ class Profile:
 
 
 @dataclass
+class EnrolmentAudio:
+    """The clips each profile was built from, kept so it can be rebuilt.
+
+    Embeddings from two different models are not comparable, so the day the
+    embedder changes every profile becomes void. With the audio still here that
+    is a re-embed pass measured in minutes; without it, enrolment starts from
+    nothing and the next few nets are spent getting back to where you were.
+
+    It also makes an honest comparison possible: two embedders scored on the
+    *same* clips, rather than on two different months of traffic.
+
+    Size is bounded per station and per clip, because this lives on an SD card:
+    the defaults work out around a megabyte per station, so a hundred-station
+    roster costs roughly a hundred megabytes.
+    """
+
+    directory: str | Path
+    per_station: int = 6
+    max_seconds: float = 5.0
+
+    def __post_init__(self) -> None:
+        self.directory = Path(self.directory)
+
+    def _folder(self, callsign: str) -> Path:
+        # Callsigns are alphanumeric, but never trust a roster file with a
+        # path: one stray slash would write outside the directory.
+        safe = re.sub(r"[^A-Z0-9_-]", "_", callsign.upper())
+        return Path(self.directory) / safe
+
+    def save(self, callsign: str, audio: np.ndarray) -> Path | None:
+        """Keep one clip for this station, dropping the oldest past the limit."""
+        if audio is None or not len(audio):
+            return None
+        try:
+            folder = self._folder(callsign)
+            folder.mkdir(parents=True, exist_ok=True)
+
+            limit = int(SAMPLE_RATE * self.max_seconds)
+            clip = np.asarray(audio, dtype=np.float32)[:limit]
+            pcm = np.clip(clip * 32768.0, -32768, 32767).astype(np.int16)
+
+            existing = sorted(folder.glob("*.wav"))
+            index = 0
+            if existing:
+                index = int(existing[-1].stem.split("-")[-1]) + 1
+            path = folder / f"clip-{index:04d}.wav"
+            with wave.open(str(path), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(SAMPLE_RATE)
+                handle.writeframes(pcm.tobytes())
+
+            # Keep the most recent: a voice heard last week is more use than
+            # one from a net six months ago on a different radio.
+            for stale in sorted(folder.glob("*.wav"))[: -self.per_station]:
+                stale.unlink(missing_ok=True)
+            return path
+        except OSError as exc:
+            log.warning("Could not keep enrolment audio for %s: %s", callsign, exc)
+            return None
+
+    def clips(self, callsign: str) -> list[np.ndarray]:
+        folder = self._folder(callsign)
+        if not folder.exists():
+            return []
+        out: list[np.ndarray] = []
+        for path in sorted(folder.glob("*.wav")):
+            try:
+                with wave.open(str(path), "rb") as handle:
+                    raw = handle.readframes(handle.getnframes())
+                out.append(np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0)
+            except (OSError, wave.Error) as exc:
+                log.warning("Skipping unreadable enrolment clip %s: %s", path, exc)
+        return out
+
+    def stations(self) -> list[str]:
+        directory = Path(self.directory)
+        if not directory.exists():
+            return []
+        return sorted(p.name for p in directory.iterdir() if p.is_dir())
+
+    def total_clips(self) -> int:
+        return sum(len(self.clips(name)) for name in self.stations())
+
+
+@dataclass
 class Suggestion:
     callsign: str
     score: float
@@ -224,6 +312,8 @@ class VoiceProfiles:
     margin: float = 0.06
     min_enrolments: int = 2
     profiles: dict[str, Profile] = field(default_factory=dict)
+    audio: EnrolmentAudio | None = None
+    """Where the clips behind these profiles are kept, if they are kept."""
 
     # -- learning ----------------------------------------------------------
 
@@ -232,6 +322,8 @@ class VoiceProfiles:
         vector = embed(audio)
         if vector is None:
             return False
+        if self.audio is not None:
+            self.audio.save(callsign, audio)
         profile = self.profiles.get(callsign)
         if profile is None:
             profile = Profile(callsign=callsign, centroid=np.zeros_like(vector))
@@ -326,6 +418,35 @@ class VoiceProfiles:
         except OSError as exc:
             log.error("Could not save voice profiles to %s: %s", self.path, exc)
             return False
+
+    def rebuild(self, store: EnrolmentAudio | None = None) -> tuple[int, int]:
+        """Re-embed every kept clip and rebuild the profiles from scratch.
+
+        What the retained audio is for. Run it after changing the embedder --
+        the old vectors are meaningless under a new model, and this replaces
+        them in minutes rather than waiting weeks for re-enrolment.
+
+        Returns (stations rebuilt, clips used).
+        """
+        store = store or self.audio
+        if store is None:
+            return (0, 0)
+
+        rebuilt: dict[str, Profile] = {}
+        clips_used = 0
+        for callsign in store.stations():
+            for clip in store.clips(callsign):
+                vector = embed(clip)
+                if vector is None:
+                    continue
+                profile = rebuilt.get(callsign)
+                if profile is None:
+                    profile = Profile(callsign=callsign, centroid=np.zeros_like(vector))
+                    rebuilt[callsign] = profile
+                profile.add(vector)
+                clips_used += 1
+        self.profiles = rebuilt
+        return (len(rebuilt), clips_used)
 
     def forget(self, callsign: str) -> None:
         """Drop a profile -- for when a station's entries were mis-enrolled."""

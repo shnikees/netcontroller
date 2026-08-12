@@ -6,7 +6,7 @@ it does — it is what has actually been *proven* to work.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 248 offline tests. Segmentation, transcription, callsign matching,
+audio, with 267 offline tests. Segmentation, transcription, callsign matching,
 splitting a clip that caught two stations, corrections and alias learning,
 voice suggestions, multi-source capture, buffering and disk spill, live
 transcript writing, the watchdog, export, and the container image.
@@ -84,22 +84,7 @@ Roughly in order of value per effort:
 
 1. **Run a net.** Everything above is downstream of this.
 
-2. **Keep the audio each voice profile was built from — before the first real
-   net, not after.** Right now `voices.json` stores embeddings but not the
-   clips behind them, and embeddings from different models are not comparable.
-   So the day the embedder changes, every profile is void and enrolment starts
-   again from nothing.
-
-   Retaining a few seconds per enrolment turns that from "wait weeks for the
-   profiles to rebuild" into a re-embed pass measured in minutes, and it makes
-   an honest A/B possible on *identical* audio rather than on two different
-   months of traffic.
-
-   Nothing is lost by waiting while there is no real data — but the value of
-   doing it drops to zero the moment enrolments worth keeping exist. It is
-   cheap: a bounded ring of clips per station, alongside the profile.
-
-3. **A better voice embedder.** The current one is log-mel cepstral statistics
+2. **A better voice embedder.** The current one is log-mel cepstral statistics
    in numpy — 24 numbers describing average timbre, never trained to tell one
    speaker from another. It also conflates the voice with the *channel*, so a
    profile is really "Frank on his HT" and breaks when he checks in mobile.
@@ -114,21 +99,22 @@ Roughly in order of value per effort:
    `voice_id.embed()` is the only function that changes, and the evaluation
    already exists: `tools/calibrate.py` prints same-station against
    different-station similarity distributions, so the separation between those
-   two histograms *is* the measurement of whether the upgrade helped. Depends
-   on item 2 to be measurable on the same audio.
+   two histograms *is* the measurement of whether the upgrade helped.
 
-4. **Benchmark alternatives to Whisper.** NVIDIA Parakeet is faster and scores
+   The clips are already being kept (`voice.keep_audio`), so this is now a
+   swap-and-rebuild rather than weeks of re-enrolment:
+   `tools/rebuild_voices.py --compare` scores both embedders on identical
+   audio.
+
+3. **Benchmark alternatives to Whisper.** NVIDIA Parakeet is faster and scores
    better on English; Riva offers real *word boosting*, which is a proper
    answer to the 224-token prompt ceiling rather than a workaround. `stt_worker.py`
    is the only module that knows which engine is in use.
-5. **Make matching source-aware.** Per-frequency rosters currently bias
+4. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
    would cut wrong matches on a 100-station roster — carefully, since people do
    turn up on the other frequency.
-6. **Session recovery.** A crashed net leaves a complete `transcripts/*.jsonl`,
-   but nothing reads it back in. A `--resume` flag would let a restarted app
-   continue the same log rather than starting a second one.
-7. **Review after the net, not during it.** Everything self-supervised is in
+5. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards

@@ -11,12 +11,9 @@ Budget an hour, and do it on a day when there is *no* net you care about.
 
 Do these at home, they need no radio:
 
-> **If you plan to try a better voice embedder later**, decide *before* this
-> net whether to keep the audio behind each voice profile — see item 2 in
-> [STATUS.md](STATUS.md). Embeddings from different models are not comparable,
-> so without the audio, switching later means throwing away every profile and
-> starting enrolment over. It costs nothing to add now and cannot be added
-> retroactively to enrolments already made.
+> The clips behind each voice profile are kept by default
+> (`voice.keep_audio`), so a better embedder can be tried later without
+> throwing away enrolment. Leave it on unless SD card space is tight.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -188,9 +185,13 @@ For an extra copy at a specific moment:
 curl -X POST localhost:8080/api/export
 ```
 
-If something does go wrong, **leave `transcripts/` alone** and check it before
-restarting — the file from the interrupted session is still there, and a
-restart writes a new one rather than overwriting it.
+If something does go wrong, restart with `--resume`: it reloads the
+interrupted log, remembers who had already checked in, and keeps writing to the
+same files, so the net ends with one record rather than two halves.
+
+```bash
+python app.py --resume
+```
 
 ## Known-unverified list
 
