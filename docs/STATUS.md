@@ -6,7 +6,7 @@ it does — it is what has actually been *proven* to work.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 232 offline tests. Segmentation, transcription, callsign matching,
+audio, with 248 offline tests. Segmentation, transcription, callsign matching,
 splitting a clip that caught two stations, corrections and alias learning,
 voice suggestions, multi-source capture, buffering and disk spill, live
 transcript writing, the watchdog, export, and the container image.
@@ -99,12 +99,11 @@ Roughly in order of value per effort:
 5. **Session recovery.** A crashed net leaves a complete `transcripts/*.jsonl`,
    but nothing reads it back in. A `--resume` flag would let a restarted app
    continue the same log rather than starting a second one.
-6. **Extend the tuner** to the two thresholds it does not yet cover.
-   `escalation.min_confidence` can be read straight off the confidence
-   distribution of matched versus unmatched lines, and `voice.min_similarity`
-   from intra- versus inter-speaker scores once a net's worth of check-ins has
-   been confirmed. Both are calibrations on data the app already collects, so
-   neither needs a recording session of its own.
+6. **Review after the net, not during it.** Everything self-supervised is in
+   place, but the operator-supplied labels — corrections — currently have to
+   be made live. A post-net review mode, working from the session file and the
+   clip audio, would let those be batched into a few minutes afterwards
+   instead of requiring somebody at the keyboard while the net runs.
 
 ## Known limitations, not bugs
 

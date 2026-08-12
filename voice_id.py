@@ -164,6 +164,15 @@ def _dct(values: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------
 
 
+MAX_SAMPLES = 12
+"""Individual embeddings kept per station, on top of the centroid.
+
+The centroid is what identification uses. The samples are what *calibration*
+uses: you cannot work out how close two recordings of one operator are from an
+average of them. A dozen is enough to characterise the spread and small enough
+that the profile file stays readable."""
+
+
 @dataclass
 class Profile:
     """What one station sounds like, averaged over their enrolled clips."""
@@ -171,6 +180,8 @@ class Profile:
     callsign: str
     centroid: np.ndarray
     count: int = 0
+    samples: list = field(default_factory=list)
+    """Recent individual embeddings, kept so thresholds can be calibrated."""
 
     def add(self, vector: np.ndarray) -> None:
         """Fold in another clip. A running mean, so old nets still count."""
@@ -179,6 +190,11 @@ class Profile:
         if norm > 1e-9:
             self.centroid = self.centroid / norm
         self.count += 1
+        self.samples.append(vector)
+        if len(self.samples) > MAX_SAMPLES:
+            # Keep the most recent: a voice heard last week is more use than
+            # one from a net six months ago on a different radio.
+            self.samples.pop(0)
 
 
 @dataclass
@@ -278,6 +294,10 @@ class VoiceProfiles:
                     callsign=callsign,
                     centroid=vector,
                     count=int(entry.get("count", 1)),
+                    samples=[
+                        np.asarray(s, dtype=np.float32)
+                        for s in entry.get("samples", [])
+                    ],
                 )
         return len(self.profiles)
 
@@ -291,6 +311,10 @@ class VoiceProfiles:
                     callsign: {
                         "centroid": [round(float(x), 6) for x in p.centroid],
                         "count": p.count,
+                        "samples": [
+                            [round(float(x), 6) for x in sample]
+                            for sample in p.samples
+                        ],
                     }
                     for callsign, p in self.profiles.items()
                 }

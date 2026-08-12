@@ -11,7 +11,7 @@ the library is missing, and a fallback nobody exercises is a fallback that is
 broken. That job earned its keep immediately: the scipy-free high-pass turned
 out not to remove rumble at all, and is now a boxcar filter that does.
 
-232 tests, all offline, no audio hardware. About 20 seconds, most of it
+248 tests, all offline, no audio hardware. About 20 seconds, most of it
 the pipeline tests deliberately running a slow transcriber in real time.
 
 ## What each suite covers
@@ -27,6 +27,7 @@ the pipeline tests deliberately running a slow transcriber in real time.
 | `test_clip_split.py` | Splitting a clip with two stations, and — more importantly — every case where it must refuse | Synthetic word timings, so the pause is exact |
 | `test_audio_prep.py` | Conditioning: quiet input lifted, hiss not, rumble removed, waveform undistorted | Tones and noise, checked with an FFT |
 | `test_voice_id.py` | Voice embedding, enrolment, persistence, and every case where a suggestion must be withheld | Synthetic speakers: a glottal buzz shaped by fixed formants |
+| `test_calibrate.py` | Threshold calibration from collected data, and every case where it must refuse to answer | Synthetic distributions, including ones with no signal in them |
 | `test_health.py` | Watchdog state machine: stalls, silence, restarts, backlog | Injected clock, so a 5-minute silence tests in microseconds |
 | `test_resample.py` | Resampling to 16 kHz | Tones in, FFT out — run against *both* engines, so the fallback is not dead code |
 | `test_buffering.py` | Ring buffer and disk spill: wraparound, overrun policy, concurrency, corrupt files | Direct, with real threads |

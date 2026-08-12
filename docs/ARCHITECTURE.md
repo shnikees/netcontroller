@@ -72,6 +72,7 @@ code. `app.py` wires everything together and owns the process lifecycle.
 | `clip_split.py` | Splits a clip that caught two stations into separate lines |
 | `feedback.py` | Operator corrections, and the aliases learned from them |
 | `voice_id.py` | Voice profiles, and suggestions for unmatched lines |
+| `calibrate.py` | Thresholds derived from collected sessions and voices |
 | `transcript_store.py` | Session log, ordering, CSV/text export |
 | `session_writer.py` | Streams the session to disk as it happens |
 | `health.py` | Per-source health, and the combined verdict |

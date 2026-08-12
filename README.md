@@ -83,6 +83,41 @@ python app.py
 Open <http://localhost:8080>. The first run downloads the Whisper model; after
 that it works with no network at all.
 
+## Training it on your net
+
+Two commands, and neither needs you at the keyboard during a net.
+
+**After each net**, from the transcripts the app already wrote:
+
+```bash
+python tools/calibrate.py            # see what the data says
+python tools/calibrate.py --apply    # write it into config.yaml (keeps a backup)
+```
+
+It sets `escalation.min_confidence` from the confidence of matched versus
+unmatched lines, and `voice.min_similarity` from how alike two clips of one
+operator turned out to be. It refuses to suggest anything it cannot support
+yet, and says what it is still short of — no number is better than a number
+that looks measured and is not.
+
+**Once, from a recording**, for the timing thresholds:
+
+```bash
+python tools/tune.py --audio net-recording.wav --roster roster.csv
+```
+
+Replaying recordings to build the history is scriptable — `--batch` processes a
+file and exits instead of serving the dashboard:
+
+```bash
+python app.py --file last-tuesday.wav --batch
+```
+
+None of this needs an operator present. The roster is the supervision: a clean
+roster match is a labelled example, so voice profiles and calibration data
+accumulate on nets nobody was watching. Corrections make it better and faster,
+but they are not what makes it work.
+
 ## Tuning against your own net
 
 Every threshold here ships as a reasoned guess about how a net sounds. Record
@@ -534,7 +569,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-232 tests, all offline, no audio hardware needed — CI runs them on every push
+248 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

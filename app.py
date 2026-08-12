@@ -860,10 +860,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--no-log-file", action="store_true", help="console logging only"
     )
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        help="with --file: process the recording, write the transcript, exit",
+    )
     return parser.parse_args(argv)
 
 
-async def run(config: Config, wav_path: str | None) -> None:
+async def run(config: Config, wav_path: str | None, batch: bool = False) -> None:
     roster = load_roster(config.roster.path)
     log.info("Loaded %d roster entries from %s", len(roster), config.roster.path)
 
@@ -944,6 +949,20 @@ async def run(config: Config, wav_path: str | None) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: setattr(server, "should_exit", True))
 
+    if batch:
+        # Replaying a recording to build up training data: finish the file,
+        # drain the backlog, and get out. Without this the dashboard keeps
+        # serving forever, which makes the whole loop unscriptable.
+        async def finish() -> None:
+            while any(source._thread and source._thread.is_alive()
+                      for source in pipeline.sources):
+                await asyncio.sleep(0.2)
+            await asyncio.to_thread(pipeline.drain, config.buffering.drain_timeout_s)
+            log.info("Batch run complete: %d line(s)", len(store.entries))
+            server.should_exit = True
+
+        asyncio.create_task(finish())
+
     try:
         await server.serve()
     finally:
@@ -1002,7 +1021,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
-        asyncio.run(run(config, args.file))
+        asyncio.run(run(config, args.file, batch=args.batch))
     except KeyboardInterrupt:
         pass
     return 0
