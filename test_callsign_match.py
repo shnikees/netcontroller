@@ -239,6 +239,31 @@ def test_hyphenated_vocabulary_words_survive() -> None:
     assert normalize("kilo seven x-ray yankee zulu") == "K7XYZ"
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # Prompting with the phonetic alphabet makes Whisper write callsigns in
+        # a clipped style, and these are the forms that came back from it.
+        ("Net control, kilo, 7XY, yankee, zulu, checking in", "K7XYZ"),
+        ("November 5th, delta, echo, foxtrot, good evening", "N5DEF"),
+        ("This is Whiskey 6 alpha, bravo, charlie, checking in", "W6ABC"),
+    ],
+)
+def test_digits_welded_to_letters(raw: str, expected: str) -> None:
+    matcher = CallsignMatcher(roster=ROSTER + [RosterEntry("KJ6TUV", "Frank")])
+    result = matcher.match(raw)
+    assert result.matched, f"{raw!r} -> {normalize(raw)!r} ({result.reason})"
+    assert result.callsign == expected
+
+
+def test_ordinal_written_numerically_is_a_digit() -> None:
+    assert normalize("november 5th delta echo foxtrot") == "N5DEF"
+
+
+def test_a_digit_welded_to_a_phonetic_splits() -> None:
+    assert normalize("victor echo 3zulu quebec romeo") == "VE3ZQR"
+
+
 def test_mangled_quebec_still_yields_a_full_candidate(
     matcher: CallsignMatcher,
 ) -> None:
@@ -288,8 +313,48 @@ def test_load_roster_without_names(tmp_path) -> None:
     assert [e.callsign for e in load_roster(path)] == ["W6ABC", "N5DEF"]
 
 
-def test_hotwords_include_spoken_and_written_forms(matcher: CallsignMatcher) -> None:
-    prompt = matcher.hotwords(extra_vocabulary=["QNI"])
-    assert "W6ABC" in prompt
-    assert "whiskey six alpha bravo charlie" in prompt
-    assert "QNI" in prompt
+def test_bias_terms_cover_phonetics_vocabulary_and_the_roster(
+    matcher: CallsignMatcher,
+) -> None:
+    terms = matcher.bias_terms(["QNI"])
+    # The alphabet, not one spelling per station: 26 words bias every phonetic
+    # callsign on the net, where per-station spellings would eat the budget.
+    assert "whiskey" in terms and "zulu" in terms
+    assert "QNI" in terms
+    assert "W6ABC" in terms
+
+
+def test_bias_terms_put_the_likeliest_stations_first() -> None:
+    roster = [
+        RosterEntry("W6ABC", "Alice", ("Repeater",)),
+        RosterEntry("K7XYZ", "Bob", ("Simplex",)),
+    ]
+    matcher = CallsignMatcher(roster=roster)
+    terms = matcher.bias_terms(source="Repeater")
+    # This receiver's stations outrank the other frequency's, because the
+    # prompt will be cut off long before the whole roster fits.
+    assert terms.index("W6ABC") < terms.index("K7XYZ")
+
+
+def test_stations_already_heard_drop_down_the_order() -> None:
+    roster = [RosterEntry("W6ABC"), RosterEntry("K7XYZ")]
+    matcher = CallsignMatcher(roster=roster)
+    terms = matcher.bias_terms(heard={"W6ABC"})
+    # On a check-in net the station who has not checked in yet is the one
+    # about to speak.
+    assert terms.index("K7XYZ") < terms.index("W6ABC")
+
+
+def test_roster_csv_can_assign_stations_to_frequencies(tmp_path) -> None:
+    path = tmp_path / "roster.csv"
+    path.write_text(
+        "callsign,name,sources\nW6ABC,Alice,Repeater\nK7XYZ,Bob,Repeater;Simplex\nN5DEF,Carol,\n",
+        encoding="utf-8",
+    )
+    entries = {e.callsign: e for e in load_roster(path)}
+    assert entries["W6ABC"].sources == ("Repeater",)
+    assert entries["K7XYZ"].sources == ("Repeater", "Simplex")
+    # No column means the station is expected anywhere.
+    assert entries["N5DEF"].sources == ()
+    assert entries["N5DEF"].on_source("Repeater")
+    assert not entries["W6ABC"].on_source("Simplex")

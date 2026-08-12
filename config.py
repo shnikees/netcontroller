@@ -125,6 +125,10 @@ class SplitConfig:
 @dataclass
 class WhisperConfig:
     model_size: str = "base"
+    condition_audio: bool = True
+    """High-pass and normalise each clip before decoding. Sub-millisecond."""
+    prompt_token_budget: int = 200
+    """Whisper's prompt window is 224 tokens; overflow is silently discarded."""
     device: str = "auto"
     compute_type: str | None = None
     beam_size: int = 5
@@ -142,6 +146,29 @@ class WhisperConfig:
             "roger",
         ]
     )
+
+
+@dataclass
+class EscalationConfig:
+    """Re-transcribe the hard clips with a bigger model, in the gaps.
+
+    The live line comes from a model chosen for speed. Anything that came back
+    unmatched or unsure is queued for a second pass with a larger model, run
+    only when nothing live is waiting -- so the dashboard keeps up while the
+    accuracy of a bigger model lands on exactly the clips that needed it.
+    """
+
+    enabled: bool = False
+    """Off by default: it loads a second model, which is real memory."""
+    model_size: str = "small"
+    device: str = "auto"
+    compute_type: str | None = None
+    on_unmatched: bool = True
+    """Escalate anything the roster could not match -- the clearest failures."""
+    min_confidence: float = 0.55
+    """Also escalate matched lines below this confidence."""
+    max_pending: int = 50
+    """Ceiling on the queue; past it the oldest waiting clip is dropped."""
 
 
 @dataclass
@@ -225,6 +252,7 @@ class Config:
     vad: VadConfig = field(default_factory=VadConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
+    escalation: EscalationConfig = field(default_factory=EscalationConfig)
     roster: RosterConfig = field(default_factory=RosterConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
@@ -270,6 +298,7 @@ _SECTIONS = {
     "vad": VadConfig,
     "split": SplitConfig,
     "whisper": WhisperConfig,
+    "escalation": EscalationConfig,
     "roster": RosterConfig,
     "server": ServerConfig,
     "health": HealthConfig,

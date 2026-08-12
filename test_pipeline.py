@@ -55,7 +55,12 @@ class SlowStub:
     def load(self) -> None:
         pass
 
-    def transcribe(self, audio: np.ndarray):
+    def build_prompt(self, terms, lead_in: str = "") -> str:
+        self.prompt_terms_used = len(terms)
+        self.prompt_terms_offered = len(terms)
+        return ", ".join(terms[:10])
+
+    def transcribe(self, audio: np.ndarray, prompt: str | None = None):
         if self.delay:
             time.sleep(self.delay)
         with self._lock:
@@ -320,14 +325,7 @@ def test_priority_source_is_transcribed_first(tmp_path, loop) -> None:
     write_net_wav(repeater, transmissions=3)
     write_net_wav(simplex, transmissions=3)
 
-    order: list[str] = []
-
-    class RecordingStub(SlowStub):
-        def transcribe(self, audio):
-            result = super().transcribe(audio)
-            return result
-
-    stub = RecordingStub(delay=0.3)
+    stub = SlowStub(delay=0.3)
     pipeline, store = build(
         tmp_path,
         loop,

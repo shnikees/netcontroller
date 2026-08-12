@@ -239,6 +239,62 @@ Two settings interact with fast nets and are worth knowing about:
 - **`whisper.vocabulary`** — adding the phrases your net actually uses biases
   decoding, which helps most exactly when speech is quick and clipped.
 
+### Accuracy without losing speed
+
+Four things, in the order they cost you time (the first three cost none):
+
+**1. The prompt actually fits.** Whisper's prompt window is 224 tokens and
+anything past it is silently discarded — a written callsign costs about four
+tokens, so roughly 48 fit *in total*. A roster of 50+ was overflowing and being
+truncated at an arbitrary point, which is worse than a short prompt chosen on
+purpose. Now the prompt carries the phonetic alphabet (26 words that bias every
+spelled callsign, rather than seven tokens per station), the net vocabulary,
+and as many callsigns as the budget allows — ordered by who is most likely to
+speak next.
+
+**2. Per-frequency rosters.** With 20–50 stations on the repeater and another
+20–50 on simplex, no single prompt can cover both. The optional third column in
+`roster.csv` says which receivers a station is expected on:
+
+```csv
+callsign,name,sources
+W6ABC,Alice,Repeater
+KD9MNO,Dave,Simplex
+N5DEF,Carol,Repeater;Simplex
+KJ6TUV,Frank,
+```
+
+Each receiver then gets a prompt biased toward *its* stations, which is what
+makes 20–50 per frequency fit where 100 never would. Stations who have not
+checked in yet sort first — on a check-in net they are the ones about to speak.
+Matching still runs against the whole roster, so a station who misses the
+prompt is still matched; they just lose the decoding hint.
+
+**3. Conditioned audio.** Every clip is high-passed and peak-normalised before
+decoding — 0.8 ms for a five-second clip. Whisper was trained on normalised
+audio, and this matters most on line-in and mic input where the level is
+whatever the radio's volume knob happened to be.
+
+**4. Escalation — the one that buys real accuracy.** The live line comes from a
+fast model. Anything that comes back **unmatched or low-confidence** is queued
+for a second pass with a bigger model, run only when nothing live is waiting,
+and the line is updated in place and marked. Since only the hard clips are
+escalated, you pay a fraction of the big model's cost while getting its
+accuracy exactly where the fast one failed:
+
+```yaml
+whisper:
+  model_size: base      # the live line
+escalation:
+  enabled: true
+  model_size: small     # or medium/large-v3 on a GPU
+```
+
+The second pass is also *targeted*: it biases toward the handful of roster
+callsigns nearest to what was actually heard, which is a short list that fits
+easily — so this scales to any roster size. An operator correction always wins;
+a re-run never overwrites a human.
+
 ### When two stations land in one clip
 
 If stations key up inside `vad.silence_ms` of each other, the VAD hands both to
@@ -421,7 +477,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-191 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+209 tests, all offline, no audio hardware needed. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 

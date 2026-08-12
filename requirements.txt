@@ -9,6 +9,8 @@ numpy>=1.24
 # High-quality resampling for inputs that will not do 16 kHz (mic, line in).
 # Optional: a slower built-in fallback runs if this is missing.
 soxr>=0.3
+# High-pass filtering before decoding. Optional: falls back to DC removal.
+scipy>=1.11
 rapidfuzz>=3.6
 PyYAML>=6.0
 

@@ -95,6 +95,13 @@ whisper:
   compute_type: null
   beam_size: 5
   language: en
+  # High-pass and peak-normalise each clip before decoding. Under a millisecond,
+  # and it matters most on line-in and mic input where levels vary wildly.
+  condition_audio: true
+  # Whisper's prompt window is 224 tokens and overflow is discarded silently,
+  # so the roster is packed in order of who is most likely to speak next --
+  # see the roster `sources` column.
+  prompt_token_budget: 200
   # Biases decoding toward net vocabulary. Roster callsigns are added
   # automatically, in both written and phonetic form.
   vocabulary:
@@ -107,6 +114,20 @@ whisper:
     - traffic
     - over
     - roger
+
+# Re-transcribe the hard clips with a bigger model, in the gaps between
+# transmissions. The live line still comes from the fast model; anything that
+# came back unmatched or unsure is queued for a second pass and the line is
+# updated in place. Costs a second model in memory, which is why it is off by
+# default -- turn it on where you have the RAM (or a GPU).
+escalation:
+  enabled: false
+  model_size: small
+  device: auto
+  compute_type: null
+  on_unmatched: true      # the clearest failures
+  min_confidence: 0.55    # also retry matched lines below this
+  max_pending: 50
 
 roster:
   path: roster.csv

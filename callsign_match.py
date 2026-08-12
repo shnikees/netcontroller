@@ -162,6 +162,15 @@ LOOSE_CALLSIGN_RE = re.compile(r"\b([A-Z]{1,3}[0-9][A-Z]{0,4})\b")
 class RosterEntry:
     callsign: str
     name: str = ""
+    sources: tuple[str, ...] = ()
+    """Which receivers this station is expected on; empty means all of them.
+
+    With 40-100 stations across two frequencies, no single prompt can bias
+    Whisper toward all of them -- see CallsignMatcher.bias_terms.
+    """
+
+    def on_source(self, source: str) -> bool:
+        return not self.sources or not source or source in self.sources
 
 
 @dataclass
@@ -205,13 +214,56 @@ def load_roster(path: str | Path) -> list[RosterEntry]:
                 continue
             seen.add(callsign)
             name = row[1].strip() if len(row) > 1 else ""
-            entries.append(RosterEntry(callsign=callsign, name=name))
+            # Optional third column: the frequencies this station is expected
+            # on, separated by ";" or "|" (a comma would break the CSV).
+            raw_sources = row[2].strip() if len(row) > 2 else ""
+            sources = tuple(
+                part.strip()
+                for part in re.split(r"[;|]", raw_sources)
+                if part.strip()
+            )
+            entries.append(
+                RosterEntry(callsign=callsign, name=name, sources=sources)
+            )
     return entries
 
 
 # --------------------------------------------------------------------------
 # Normalization
 # --------------------------------------------------------------------------
+
+
+ORDINAL_SUFFIX_RE = re.compile(r"^([0-9]+)(st|nd|rd|th)$")
+
+
+def _split_alphanumeric(token: str) -> list[str]:
+    """Pull apart tokens where Whisper mixed digits and letters in one word.
+
+    Prompting the model with the phonetic alphabet makes it write callsigns in
+    a more clipped style, and these are the forms that come back:
+
+        "5th"        an ordinal written numerically  -> 5
+        "3zulu"      a digit welded to a phonetic    -> 3, zulu
+        "7xy"        a run of spelled characters     -> 7, x, y
+
+    Left alone each of these blocks a match that would otherwise have worked.
+    """
+    ordinal = ORDINAL_SUFFIX_RE.match(token)
+    if ordinal:
+        return [ordinal.group(1)]
+
+    leading = re.fullmatch(r"([0-9]+)([a-z]+)", token)
+    if leading and leading.group(2) in PHONETIC_MAP:
+        return [leading.group(1), leading.group(2)]
+    trailing = re.fullmatch(r"([a-z]+)([0-9]+)", token)
+    if trailing and trailing.group(1) in PHONETIC_MAP:
+        return [trailing.group(1), trailing.group(2)]
+
+    # A short mixed run is the model collapsing spelled-out characters
+    # ("x-ray yankee" -> "XY"); splitting it back recovers them.
+    if (leading or trailing) and len(token) <= 5:
+        return list(token)
+    return [token]
 
 
 def _split_hyphens(token: str) -> list[str]:
@@ -289,12 +341,13 @@ def tokenize(text: str) -> list[Token]:
     expanded: list[str] = []
     spans: list[tuple[int, int]] = []
     for match in matches:
-        for part in _split_hyphens(match.group()):
-            for piece in _split_glued_phonetics(part):
-                expanded.append(piece)
-                # Every piece of a split token points at the whole token; good
-                # enough to locate a callsign, and simpler than sub-spans.
-                spans.append((match.start(), match.end()))
+        for hyphenated in _split_hyphens(match.group()):
+            for part in _split_alphanumeric(hyphenated):
+                for piece in _split_glued_phonetics(part):
+                    expanded.append(piece)
+                    # Every piece of a split token points at the whole token;
+                    # good enough to locate a callsign, simpler than sub-spans.
+                    spans.append((match.start(), match.end()))
 
     out: list[Token] = []
     for i, token in enumerate(expanded):
@@ -464,10 +517,73 @@ class CallsignMatcher:
         return list(self._by_callsign)
 
     def hotwords(self, extra_vocabulary: list[str] | None = None) -> str:
-        """Build a Whisper `initial_prompt` biasing decoding toward the roster."""
-        spoken = [_spell_phonetically(c) for c in self._by_callsign]
-        parts = list(self._by_callsign) + spoken + list(extra_vocabulary or [])
-        return "Amateur radio net check-ins. " + ", ".join(parts) + "."
+        """Whisper prompt for the whole roster. Small nets only -- see below."""
+        return " ".join(self.bias_terms(extra_vocabulary))
+
+    def bias_terms(
+        self,
+        extra_vocabulary: list[str] | None = None,
+        *,
+        source: str = "",
+        heard: set[str] | None = None,
+        limit: int | None = None,
+    ) -> list[str]:
+        """Terms to bias decoding, most valuable first.
+
+        Whisper's prompt window is 224 tokens, and a written callsign costs
+        about four of them -- so roughly 48 fit, total. A net with 40-100
+        stations across two frequencies cannot be covered by one prompt, and a
+        prompt that overflows is silently truncated at an arbitrary point,
+        which is worse than a short one chosen on purpose.
+
+        So the list is ordered by how likely each station is to be the next
+        voice on *this* receiver:
+
+        1. The phonetic alphabet itself, then net vocabulary. Spelling out one
+           callsign per station would cost seven tokens each; the alphabet they
+           are all spelled from costs about thirty once, and biases toward
+           every phonetic spelling on the net rather than a chosen few.
+        2. Stations assigned to this source who have not checked in yet. On a
+           check-in net those are precisely the ones about to speak.
+        3. Stations assigned to this source who already have.
+        4. Everyone else, in case somebody turns up on the wrong frequency.
+
+        The caller trims to whatever the token budget allows; this only decides
+        the order. Matching still runs against the entire roster, so a station
+        that never makes the prompt is still matched correctly -- they just do
+        not get the decoding hint.
+        """
+        heard = heard or set()
+        mine = [e for e in self.roster if e.on_source(source)]
+        others = [e for e in self.roster if not e.on_source(source)]
+
+        pending = [e.callsign for e in mine if e.callsign not in heard]
+        already = [e.callsign for e in mine if e.callsign in heard]
+        elsewhere = [e.callsign for e in others]
+
+        terms = (
+            PHONETIC_ALPHABET
+            + list(extra_vocabulary or [])
+            + pending
+            + already
+            + elsewhere
+        )
+        return terms[:limit] if limit else terms
+
+    def nearest(self, candidate: str, limit: int = 8) -> list[str]:
+        """Roster callsigns closest to a heard token.
+
+        This is what makes a second pass affordable on a big roster: instead of
+        biasing toward 100 stations -- impossible inside the prompt window --
+        bias toward the handful the first pass was already close to. A short,
+        targeted list fits easily and pushes hard in the right direction.
+        """
+        if not candidate:
+            return []
+        scored = process.extract(
+            candidate, self._by_callsign.keys(), scorer=fuzz.ratio, limit=limit
+        )
+        return [name for name, _score, _index in scored]
 
     def match_all(self, text: str) -> list[MatchResult]:
         """Every distinct roster station heard in this text, in order.
@@ -560,6 +676,15 @@ class CallsignMatcher:
         base.callsign = entry.callsign
         base.name = entry.name
         return base
+
+
+PHONETIC_ALPHABET: list[str] = [
+    "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+    "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa",
+    "quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey",
+    "xray", "yankee", "zulu", "niner",
+]
+"""Spoken once, biases every callsign spelled from it -- see bias_terms."""
 
 
 _LETTER_TO_PHONETIC = {

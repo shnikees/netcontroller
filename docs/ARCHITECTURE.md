@@ -27,8 +27,11 @@ is shared.
                                │              clip_spill.py  WAVs on disk,
                                │                     ╱       replayed in lulls
                                ▼                    ╱
-                    stt_worker.py   faster-whisper → text + confidence
-                               │  Transcription(text, confidence, …)
+                    stt_worker.py   audio_prep → faster-whisper → text
+                               │  Transcription(text, confidence, words)
+                               │  unsure? → second pass with a bigger model,
+                               │            biased toward the nearest roster
+                               │            entries, run only when idle
                                ▼
                     callsign_match.py   aliases → normalize → extract → fuzzy match
                                │  MatchResult(matched, callsign, score, …)
@@ -60,6 +63,7 @@ code. `app.py` wires everything together and owns the process lifecycle.
 | `app.py` | Entrypoint, `SourceCapture` and `Pipeline`, watchdog task |
 | `audio_capture.py` | Device selection, channel/gain, → 16 kHz frames |
 | `resample.py` | Any sample rate → 16 kHz (soxr, or a built-in fallback) |
+| `audio_prep.py` | High-pass and normalise a clip before decoding |
 | `ring_buffer.py` | Pre-allocated audio buffer between callback and VAD |
 | `vad_segmenter.py` | One clip per transmission |
 | `clip_spill.py` | Disk overflow when the transcriber is behind |
@@ -137,6 +141,29 @@ will not notice a plausible wrong callsign in a scrolling log.
 The vocabulary tables (`PHONETIC_MAP`, `DIGIT_MAP`, `AMBIGUOUS_DIGIT_MAP`) are
 the main tuning surface. They are meant to grow as real nets surface new
 mis-transcriptions — see [TESTING.md](TESTING.md).
+
+### `stt_worker.py` and the prompt budget
+
+Whisper's prompt window is 224 tokens, and overflow is discarded without a
+word. A written callsign costs about four tokens, so about 48 fit — against a
+roster of 40-100 across two frequencies. Listing the roster therefore does not
+work: most of it would be dropped at an arbitrary point, which is strictly
+worse than a shorter prompt chosen deliberately.
+
+`build_prompt` counts real tokens with the model's own tokenizer and stops at
+the budget. What survives is decided by `CallsignMatcher.bias_terms`, ordered
+by how likely each station is to be the next voice *on this receiver*: the
+phonetic alphabet first (26 words that bias every spelled callsign, where
+per-station spellings would cost seven tokens each), then net vocabulary, then
+this source's stations who have not checked in yet, then the rest.
+
+**Escalation** is the other half. A clip that came back unmatched or unsure is
+queued for a second pass with a larger model, run only when no live clip and no
+spilled clip is waiting — improving an old line must never delay the current
+one. That pass biases toward `matcher.nearest()`: the handful of roster entries
+the first pass was already close to, which is short enough to fit whatever the
+roster size. The result replaces the line only if it genuinely matched better,
+and never if an operator has already corrected it by hand.
 
 ### `clip_split.py`
 

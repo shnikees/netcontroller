@@ -1,8 +1,10 @@
-callsign,name
-W6ABC,Alice
-K7XYZ,Bob
-N5DEF,Carol
-KD9MNO,Dave
-AA4PQ,Erin
-KJ6TUV,Frank
-N0GHI,Grace
+callsign,name,sources
+# The third column is optional: which receivers a station is expected on,
+# separated by ; or |. Leave it blank for stations who could be anywhere.
+W6ABC,Alice,Repeater
+K7XYZ,Bob,Repeater
+N5DEF,Carol,Repeater;Simplex
+KD9MNO,Dave,Simplex
+AA4PQ,Erin,Simplex
+KJ6TUV,Frank,
+N0GHI,Grace,

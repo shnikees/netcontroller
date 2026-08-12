@@ -13,7 +13,19 @@
 # You should have received a copy of the GNU General Public License along with
 # this program. If not, see <https://www.gnu.org/licenses/>.
 
-"""faster-whisper wrapper: one clip in, text plus a confidence estimate out."""
+"""faster-whisper wrapper: one clip in, text plus a confidence estimate out.
+
+Two things here exist to buy accuracy without spending latency.
+
+**A prompt that fits.** Whisper's prompt window is 224 tokens and anything
+past it is silently dropped, so a roster of 50+ stations cannot simply be
+listed -- most of it would be discarded at an arbitrary point. `build_prompt`
+counts real tokens and stops at the budget, which is why the caller hands over
+terms already ordered by how likely each station is to speak next.
+
+**Conditioned audio.** Clips are high-passed and normalised before decoding;
+under a millisecond against a transcription measured in seconds.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +35,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from audio_prep import prepare
+
 log = logging.getLogger(__name__)
+
+LEAD_IN = "Amateur radio net check-ins."
 
 
 @dataclass
@@ -68,7 +84,17 @@ class SttWorker:
     word_timestamps: bool = True
     """Needed to split a clip that caught two stations: the pause between them
     is only visible in the timings."""
+    prompt_token_budget: int = 200
+    """Under Whisper's 224-token window, leaving room for the lead-in."""
+    condition_audio: bool = True
+    log_prob_threshold: float = -1.0
+    no_speech_threshold: float = 0.6
+    """Whisper invents text on clips that are only noise; these two are what
+    keep a squelch tail from becoming a check-in."""
     _model: object | None = field(default=None, init=False, repr=False)
+    _tokenizer_cache: object | None = field(default=None, init=False, repr=False)
+    prompt_terms_used: int = field(default=0, init=False)
+    prompt_terms_offered: int = field(default=0, init=False)
 
     def load(self) -> None:
         """Load the model. Called eagerly at startup so the first check-in of
@@ -101,17 +127,61 @@ class SttWorker:
             log.debug("CUDA probe failed; falling back to CPU", exc_info=True)
         return "cpu"
 
-    def transcribe(self, audio: np.ndarray) -> Transcription:
+    def build_prompt(self, terms: list[str], lead_in: str = LEAD_IN) -> str:
+        """Pack as many bias terms as the token window allows, in order.
+
+        Counting real tokens rather than guessing is the point: the difference
+        between a prompt that biases 48 stations and one that is truncated
+        mid-word is invisible until somebody checks.
+        """
         if self._model is None:
             self.load()
+        tokenizer = self._tokenizer()
+        if tokenizer is None:  # pragma: no cover - only if the API changes
+            return lead_in + " " + ", ".join(terms[:40]) + "."
+
+        used = len(tokenizer.encode(lead_in))
+        kept: list[str] = []
+        for term in terms:
+            cost = len(tokenizer.encode(f" {term},"))
+            if used + cost > self.prompt_token_budget:
+                break
+            kept.append(term)
+            used += cost
+        self.prompt_terms_used = len(kept)
+        self.prompt_terms_offered = len(terms)
+        return f"{lead_in} " + ", ".join(kept) + "."
+
+    def _tokenizer(self):
+        if self._tokenizer_cache is None and self._model is not None:
+            try:
+                from faster_whisper.tokenizer import Tokenizer
+
+                self._tokenizer_cache = Tokenizer(
+                    self._model.hf_tokenizer,  # type: ignore[union-attr]
+                    multilingual=True,
+                    task="transcribe",
+                    language=self.language or "en",
+                )
+            except Exception:  # pragma: no cover - depends on the library
+                log.debug("No tokenizer available; prompt will be estimated")
+        return self._tokenizer_cache
+
+    def transcribe(self, audio: np.ndarray, prompt: str | None = None) -> Transcription:
+        if self._model is None:
+            self.load()
+        if self.condition_audio:
+            audio = prepare(audio)
         segments, info = self._model.transcribe(  # type: ignore[union-attr]
             audio,
             language=self.language,
             beam_size=self.beam_size,
-            initial_prompt=self.initial_prompt or None,
+            initial_prompt=(prompt if prompt is not None else self.initial_prompt) or None,
             vad_filter=False,  # the segmenter already did this
             condition_on_previous_text=False,  # transmissions are independent
             word_timestamps=self.word_timestamps,
+            log_prob_threshold=self.log_prob_threshold,
+            no_speech_threshold=self.no_speech_threshold,
         )
         segments = list(segments)
         text = " ".join(s.text.strip() for s in segments).strip()

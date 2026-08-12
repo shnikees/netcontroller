@@ -49,6 +49,8 @@ from pathlib import Path
 import uvicorn
 
 from audio_capture import TARGET_RATE, AudioCapture, list_devices
+import collections
+
 from callsign_match import CallsignMatcher, load_roster
 from clip_split import Segment, split_transmissions
 from clip_spill import SpillStore
@@ -64,6 +66,24 @@ from transcript_store import TranscriptStore
 from vad_segmenter import VadSegmenter
 
 log = logging.getLogger("net-stt")
+
+
+def _segment_audio(clip, segment):
+    """The slice of clip audio belonging to one segment.
+
+    A second pass has to re-hear the same audio, and after a split that is a
+    portion of the clip rather than all of it -- feeding the whole thing back
+    would re-transcribe the other station too.
+    """
+    audio = getattr(clip, "audio", None)
+    if audio is None:
+        return None
+    samples_per_ms = TARGET_RATE // 1000
+    start = max(0, segment.start_offset_ms * samples_per_ms)
+    end = min(len(audio), start + segment.duration_ms * samples_per_ms)
+    if end <= start:
+        return audio
+    return audio[start:end]
 
 
 STOP_SENTINEL = (-(10**9), -1, None)
@@ -327,8 +347,17 @@ class Pipeline:
             compute_type=config.whisper.compute_type,
             beam_size=config.whisper.beam_size,
             language=config.whisper.language,
-            initial_prompt=matcher.hotwords(config.whisper.vocabulary),
+            condition_audio=config.whisper.condition_audio,
+            prompt_token_budget=config.whisper.prompt_token_budget,
         )
+        # A second, larger model for clips the first pass could not resolve.
+        # Loaded lazily: it is real memory, and a net may never need it.
+        self._escalator: SttWorker | None = None
+        self._escalate: collections.deque = collections.deque(
+            maxlen=config.escalation.max_pending
+        )
+        self._prompts: dict[str, str] = {}
+        self._prompt_generation = -1
 
         self.sources = [
             SourceCapture(
@@ -387,6 +416,31 @@ class Pipeline:
             time.sleep(0.2)
         return self._clips.qsize() + self.spill.pending()
 
+    # -- prompts -----------------------------------------------------------
+
+    def _prompt_for(self, source: str) -> str:
+        """Whisper prompt for this receiver, rebuilt as the net progresses.
+
+        Cached until the set of stations heard changes: the ordering depends on
+        who has already checked in, and rebuilding it counts tokens.
+        """
+        heard = set(self.store.check_ins())
+        if len(heard) != self._prompt_generation:
+            self._prompts.clear()
+            self._prompt_generation = len(heard)
+        if source not in self._prompts:
+            terms = self.matcher.bias_terms(
+                self.config.whisper.vocabulary, source=source, heard=heard
+            )
+            self._prompts[source] = self.stt.build_prompt(terms)
+            log.debug(
+                "[%s] prompt carries %d of %d bias terms",
+                source or "main",
+                self.stt.prompt_terms_used,
+                self.stt.prompt_terms_offered,
+            )
+        return self._prompts[source]
+
     # -- clip queue, spill, and transcription ------------------------------
 
     def _enqueue(self, clip) -> None:
@@ -432,6 +486,106 @@ class Pipeline:
             path.name,
         )
 
+    def _maybe_escalate(self, entry, audio) -> None:
+        """Queue a line for a second, better pass when the first was unsure."""
+        settings = self.config.escalation
+        if not settings.enabled or entry.escalated or audio is None:
+            return
+        unsure = (not entry.matched and settings.on_unmatched) or (
+            entry.matched and entry.confidence < settings.min_confidence
+        )
+        if not unsure:
+            return
+        if len(self._escalate) == self._escalate.maxlen:
+            log.warning("Escalation queue full; dropping the oldest waiting clip")
+        self._escalate.append((entry.id, audio, entry.candidate, entry.source))
+
+    def _escalate_one(self) -> bool:
+        """Re-transcribe one queued clip. Returns whether there was work."""
+        if not self._escalate:
+            return False
+        entry_id, audio, candidate, source = self._escalate.popleft()
+        if audio is None:
+            return False
+
+        worker = self._escalation_worker()
+        # The targeted part: bias toward the handful of roster entries the
+        # first pass was already near, rather than a roster that cannot fit.
+        terms = self.matcher.nearest(candidate or "") + self.matcher.bias_terms(
+            self.config.whisper.vocabulary,
+            source=source,
+            heard=set(self.store.check_ins()),
+        )
+        try:
+            better = worker.transcribe(audio, prompt=worker.build_prompt(terms))
+        except Exception as exc:
+            self.fleet.note_error(f"escalation failed: {exc}")
+            log.exception("Escalation pass failed for entry %d", entry_id)
+            return True
+        if not better.text:
+            return True
+
+        result = self.matcher.match(better.text)
+        entry = self.store.get(entry_id)
+        if entry is None:
+            return True
+        # Only replace the line if the second pass actually did better; a
+        # bigger model is not automatically right, and churning a line net
+        # control has already read costs more than it gains.
+        was = entry.matched_callsign or "unmatched"
+        improved = (result.matched and not entry.matched) or (
+            result.matched and result.score > entry.match_score
+        )
+        if not improved:
+            log.debug("Escalation gained nothing for entry %d", entry_id)
+            return True
+
+        updated = self.store.improve(
+            entry_id,
+            raw_text=better.text,
+            matched=result.matched,
+            matched_callsign=result.callsign,
+            operator_name=result.name,
+            confidence=better.confidence,
+            match_score=result.score,
+            candidate=result.candidate,
+            unmatched_reason=result.reason,
+        )
+        if updated is None:  # an operator already fixed it by hand
+            return True
+
+        log.info(
+            "Second pass improved entry %d: %s -> %s",
+            entry_id,
+            was,  # captured before improve() mutated the entry in place
+            updated.matched_callsign,
+        )
+        if self.session is not None:
+            self.session.append(updated)
+        asyncio.run_coroutine_threadsafe(
+            self.broadcaster.broadcast(
+                {"type": "correction", "entry": updated.to_dict(), "learned": False}
+            ),
+            self.loop,
+        )
+        return True
+
+    def _escalation_worker(self) -> SttWorker:
+        if self._escalator is None:
+            settings = self.config.escalation
+            log.info("Loading %s for second-pass transcription", settings.model_size)
+            self._escalator = SttWorker(
+                model_size=settings.model_size,
+                device=settings.device,
+                compute_type=settings.compute_type,
+                beam_size=self.config.whisper.beam_size,
+                language=self.config.whisper.language,
+                condition_audio=self.config.whisper.condition_audio,
+                prompt_token_budget=self.config.whisper.prompt_token_budget,
+            )
+            self._escalator.load()
+        return self._escalator
+
     def _transcribe_loop(self) -> None:
         """Drain the clip queue, then any spilled backlog, forever.
 
@@ -443,18 +597,22 @@ class Pipeline:
             try:
                 item = self._clips.get(timeout=0.5)
             except queue.Empty:
-                self._drain_one_spilled()
+                # Live traffic first, then the disk backlog, then second passes:
+                # improving an old line must never delay the current one.
+                if not self._drain_one_spilled():
+                    self._escalate_one()
                 continue
             if item[2] is None:
                 return
             self._handle_clip(item[2], late=False)
 
-    def _drain_one_spilled(self) -> None:
+    def _drain_one_spilled(self) -> bool:
+        """Transcribe one spilled clip. Returns whether there was work."""
         if not self.config.buffering.spill_enabled:
-            return
+            return False
         spilled = self.spill.read_oldest()
         if spilled is None:
-            return
+            return False
         clip = SimpleNamespace(
             audio=spilled.audio,
             start_offset_ms=spilled.start_offset_ms,
@@ -465,6 +623,7 @@ class Pipeline:
         log.info("Catching up: transcribing spilled clip %d", spilled.sequence)
         self._handle_clip(clip, late=True)
         self.fleet.note_spill(self.spill.spilled, self.spill.pending())
+        return True
 
     def _handle_clip(self, clip, late: bool = False) -> None:
         started_at = self._session_start + timedelta(milliseconds=clip.start_offset_ms)
@@ -472,7 +631,9 @@ class Pipeline:
         health.note_clip()
         began = time.monotonic()
         try:
-            transcription = self.stt.transcribe(clip.audio)
+            transcription = self.stt.transcribe(
+                clip.audio, prompt=self._prompt_for(getattr(clip, "source", ""))
+            )
         except Exception as exc:
             # One bad clip must not take the pipeline down mid-net.
             health.note_error(f"transcription failed: {exc}")
@@ -537,6 +698,7 @@ class Pipeline:
         )
         if self.session is not None:
             self.session.append(entry)
+        self._maybe_escalate(entry, _segment_audio(clip, segment))
         log.info(
             "%s |%s %s | %s%s",
             entry.timestamp,

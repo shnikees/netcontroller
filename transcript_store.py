@@ -53,6 +53,8 @@ class TranscriptEntry:
     """Transcribed from the disk backlog, after the transmission had passed."""
     source: str = ""
     """Which receiver heard it, when more than one is configured."""
+    escalated: bool = False
+    """Re-transcribed by a larger model after the first pass was unsure."""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -125,6 +127,38 @@ class TranscriptStore:
         entry.operator_name = operator_name
         entry.corrected = True
         entry.unmatched_reason = ""
+        return entry
+
+    def improve(
+        self,
+        entry_id: int,
+        *,
+        raw_text: str,
+        matched: bool,
+        matched_callsign: str | None,
+        operator_name: str,
+        confidence: float,
+        match_score: float,
+        candidate: str | None,
+        unmatched_reason: str,
+    ) -> TranscriptEntry | None:
+        """Replace a line with the result of a second, better transcription.
+
+        An operator correction always wins: if a human has already fixed this
+        line, a machine re-run must not undo their work.
+        """
+        entry = self.get(entry_id)
+        if entry is None or entry.corrected:
+            return None
+        entry.raw_text = raw_text
+        entry.matched = matched
+        entry.matched_callsign = matched_callsign
+        entry.operator_name = operator_name
+        entry.confidence = round(confidence, 3)
+        entry.match_score = round(match_score, 1)
+        entry.candidate = candidate
+        entry.unmatched_reason = unmatched_reason
+        entry.escalated = True
         return entry
 
     def all(self) -> list[dict]:
