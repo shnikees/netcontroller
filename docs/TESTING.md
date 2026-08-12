@@ -4,7 +4,7 @@
 .venv/bin/python -m pytest
 ```
 
-156 tests, all offline, no audio hardware. About 20 seconds, most of it
+162 tests, all offline, no audio hardware. About 20 seconds, most of it
 the pipeline tests deliberately running a slow transcriber in real time.
 
 ## What each suite covers
@@ -19,7 +19,7 @@ the pipeline tests deliberately running a slow transcriber in real time.
 | `test_health.py` | Watchdog state machine: stalls, silence, restarts, backlog | Injected clock, so a 5-minute silence tests in microseconds |
 | `test_resample.py` | Resampling to 16 kHz | Tones in, FFT out — run against *both* engines, so the fallback is not dead code |
 | `test_buffering.py` | Ring buffer and disk spill: wraparound, overrun policy, concurrency, corrupt files | Direct, with real threads |
-| `test_pipeline.py` | The whole chain with a deliberately slow transcriber | End-to-end over a synthetic recording; asserts nothing is lost |
+| `test_pipeline.py` | The whole chain with a deliberately slow transcriber, plus multi-source capture | End-to-end over synthetic recordings; asserts nothing is lost and a dead receiver does not stop the others |
 
 `test_vad_segmenter.py` deliberately stubs out webrtcvad. Whether webrtcvad
 correctly identifies speech is webrtcvad's problem; where the segmenter draws

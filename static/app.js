@@ -32,7 +32,9 @@ const toast = document.getElementById("toast");
 
 let autoScroll = true;
 let filter = null;
+let sourceFilter = null;
 let roster = [];
+let sources = [];
 const counts = new Map();
 const entries = [];
 const rows = new Map(); // entry id -> <tr>, so a correction can update in place
@@ -61,11 +63,52 @@ function renderRoster() {
 
 function setFilter(callsign) {
   filter = callsign;
-  clearFilterBtn.hidden = !filter;
-  for (const row of log.children) {
-    row.classList.toggle("dim", !!filter && row.dataset.callsign !== filter);
-  }
+  applyFilters();
   renderRoster();
+}
+
+function setSourceFilter(name) {
+  sourceFilter = sourceFilter === name ? null : name;
+  applyFilters();
+  renderSources();
+}
+
+/* Callsign and source filters compose: "everything KJ6TUV said on the
+   repeater" is a question net control actually asks. */
+function applyFilters() {
+  clearFilterBtn.hidden = !filter && !sourceFilter;
+  for (const row of log.children) {
+    const hideCall = !!filter && row.dataset.callsign !== filter;
+    const hideSource = !!sourceFilter && row.dataset.source !== sourceFilter;
+    row.classList.toggle("dim", hideCall || hideSource);
+  }
+}
+
+/* Per-source health, so a dead receiver is visible without reading the log. */
+function renderSources() {
+  const panel = document.getElementById("sources");
+  if (!panel) return;
+  if (sources.length < 2) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML =
+    `<h2>Sources</h2>` +
+    sources
+      .map((name) => {
+        const state = (sourceHealth[name] || {}).state || "unknown";
+        const selected = sourceFilter === name ? " selected" : "";
+        return (
+          `<div class="source-item${selected}" data-source="${name}">` +
+          `<span class="dot ${state === "ok" ? "live" : state}"></span>` +
+          `<span>${name}</span></div>`
+        );
+      })
+      .join("");
+  for (const item of panel.querySelectorAll(".source-item")) {
+    item.onclick = () => setSourceFilter(item.dataset.source);
+  }
 }
 
 function callsignCellHTML(entry) {
@@ -94,14 +137,25 @@ function paintRow(row, entry) {
   const late = entry.late
     ? `<span class="late-mark" title="Transcribed from the backlog after the transmission had passed">late</span>`
     : "";
+  const src = entry.source
+    ? `<span class="src-mark" data-source="${entry.source}">${entry.source}</span>`
+    : "";
+  row.dataset.source = entry.source || "";
   row.innerHTML =
-    `<td class="time">${fmtTime(entry.timestamp)}${late}</td>` +
+    `<td class="time">${fmtTime(entry.timestamp)}${src}${late}</td>` +
     `<td class="call" title="Click to set the callsign">${callsignCellHTML(entry)}</td>` +
     `<td class="text"></td>` +
     `<td class="conf"><span class="bar${pct < 60 ? " low" : ""}"><span style="width:${pct}%"></span></span>${pct}%</td>`;
   // Transcript text is model output, so set it as text rather than markup.
   row.querySelector(".text").textContent = entry.raw_text;
   row.querySelector(".call").onclick = () => openCorrection(row, entry);
+  const badge = row.querySelector(".src-mark");
+  if (badge) {
+    badge.onclick = (event) => {
+      event.stopPropagation();
+      setSourceFilter(badge.dataset.source);
+    };
+  }
 }
 
 function addEntry(entry, isNew) {
@@ -224,9 +278,16 @@ alertBtn.onclick = () => {
   if (alertsOn) beep(660, 0.08); // confirm the browser will actually make noise
 };
 
+const sourceHealth = {};
+
 function renderHealth(health) {
   if (!health) return;
   const state = health.state || "ok";
+  if (health.sources) {
+    Object.assign(sourceHealth, health.sources);
+    if (sources.length === 0) sources = Object.keys(health.sources);
+    renderSources();
+  }
 
   dot.classList.remove("warning", "error");
   if (state !== "ok") dot.classList.add(state);
@@ -303,7 +364,11 @@ scrollBtn.onclick = () => {
   scrollBtn.classList.toggle("active", autoScroll);
   scrollBtn.textContent = `Auto-scroll: ${autoScroll ? "on" : "off"}`;
 };
-clearFilterBtn.onclick = () => setFilter(null);
+clearFilterBtn.onclick = () => {
+  sourceFilter = null;
+  setFilter(null);
+  renderSources();
+};
 exportBtn.onclick = async () => {
   exportBtn.disabled = true;
   try {
@@ -323,10 +388,12 @@ async function loadHistory() {
   const res = await fetch("/api/history");
   const data = await res.json();
   roster = data.roster;
+  sources = data.sources || [];
   if (entries.length === 0) {
     for (const entry of data.entries) addEntry(entry, false);
   }
   renderRoster();
+  renderSources();
 }
 
 function connect() {

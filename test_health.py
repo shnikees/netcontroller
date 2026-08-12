@@ -177,13 +177,20 @@ def test_a_dead_device_outranks_silence(
     assert "No audio from the device" in snapshot.issues[0]
 
 
-def test_finished_replay_is_not_an_error(monitor: HealthMonitor) -> None:
+def test_finished_replay_is_not_an_error(
+    monitor: HealthMonitor, clock: FakeClock
+) -> None:
     # A file replay reaching its end is success. Alarming about it would teach
     # the operator to ignore the banner during exactly the tuning workflow that
     # is meant to happen before going live.
     monitor.capture_started()
     monitor.note_frame(LOUD)
     monitor.capture_finished()
+    assert monitor.snapshot().state == OK
+
+    # And it stays fine as time passes: a finished source is not a stalled one,
+    # which is what the stall and silence timers would otherwise conclude.
+    clock.advance(600.0)
     assert monitor.snapshot().state == OK
 
 

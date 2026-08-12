@@ -35,8 +35,8 @@ import pytest
 
 import app as app_module
 from callsign_match import CallsignMatcher, RosterEntry
-from config import Config
-from health import HealthMonitor
+from config import Config, SourceConfig
+from health import HealthFleet
 from server import Broadcaster
 from transcript_store import TranscriptStore
 
@@ -112,6 +112,9 @@ def build(tmp_path, loop, stub: SlowStub, **buffering) -> tuple:
     config.vad.min_clip_ms = 300
     config.vad.silence_ms = 500
 
+    if buffering.get("sources"):
+        config.sources = buffering["sources"]
+
     store = TranscriptStore()
     pipeline = app_module.Pipeline(
         config=config,
@@ -119,8 +122,8 @@ def build(tmp_path, loop, stub: SlowStub, **buffering) -> tuple:
         matcher=CallsignMatcher(roster=ROSTER),
         broadcaster=Broadcaster(),
         loop=loop,
-        health=HealthMonitor(),
-        wav_path=buffering["wav"],
+        fleet=HealthFleet(),
+        wav_path=buffering.get("wav"),
     )
     pipeline.stt = stub
     return pipeline, store
@@ -207,4 +210,102 @@ def test_spilling_disabled_drops_instead_of_writing(tmp_path, loop) -> None:
     # The documented behaviour of turning spilling off: audio is dropped, and
     # the drop is counted rather than silent.
     assert pipeline.spill.spilled == 0
-    assert pipeline.health.snapshot().errors > 0
+    assert pipeline.fleet.snapshot()["errors"] > 0
+
+
+# --------------------------------------------------------------------------
+# Multiple receivers
+# --------------------------------------------------------------------------
+
+
+def test_two_sources_are_both_logged_and_tagged(tmp_path, loop) -> None:
+    """The repeater and the staging frequency in one log.
+
+    Each source captures independently; the transcriber is shared, so the two
+    are serialised rather than competing for the model.
+    """
+    repeater = tmp_path / "repeater.wav"
+    simplex = tmp_path / "simplex.wav"
+    write_net_wav(repeater, transmissions=3)
+    write_net_wav(simplex, transmissions=2)
+
+    stub = SlowStub()
+    pipeline, store = build(
+        tmp_path,
+        loop,
+        stub,
+        sources=[
+            SourceConfig(name="Repeater", file=str(repeater)),
+            SourceConfig(name="Simplex", file=str(simplex)),
+        ],
+    )
+
+    run_to_completion(pipeline, store, expected=5)
+
+    assert len(store.entries) == 5
+    heard = {entry.source for entry in store.entries}
+    assert heard == {"Repeater", "Simplex"}
+    assert sum(e.source == "Repeater" for e in store.entries) == 3
+    assert sum(e.source == "Simplex" for e in store.entries) == 2
+
+
+def test_sources_are_interleaved_in_time_order(tmp_path, loop) -> None:
+    repeater = tmp_path / "repeater.wav"
+    simplex = tmp_path / "simplex.wav"
+    write_net_wav(repeater, transmissions=3)
+    write_net_wav(simplex, transmissions=3)
+
+    pipeline, store = build(
+        tmp_path,
+        loop,
+        SlowStub(),
+        sources=[
+            SourceConfig(name="Repeater", file=str(repeater)),
+            SourceConfig(name="Simplex", file=str(simplex)),
+        ],
+    )
+    run_to_completion(pipeline, store, expected=6)
+
+    timestamps = [e.timestamp for e in store.entries]
+    assert timestamps == sorted(timestamps)
+
+
+def test_one_dead_source_does_not_stop_the_others(tmp_path, loop) -> None:
+    """A failed receiver must not take the net down with it."""
+    working = tmp_path / "working.wav"
+    write_net_wav(working, transmissions=3)
+
+    pipeline, store = build(
+        tmp_path,
+        loop,
+        SlowStub(),
+        sources=[
+            SourceConfig(name="Broken", device="no-such-device-xyz"),
+            SourceConfig(name="Working", file=str(working)),
+        ],
+    )
+    config = pipeline.config
+    config.health.restart_capture = False  # fail fast rather than retry forever
+
+    run_to_completion(pipeline, store, expected=3)
+
+    assert len(store.entries) == 3
+    assert all(e.source == "Working" for e in store.entries)
+
+    health = pipeline.fleet.snapshot()
+    assert health["state"] == "error"
+    # The banner has to name the broken one, or the operator does not know
+    # which receiver to go and look at.
+    assert any("Broken" in issue for issue in health["issues"])
+    assert health["sources"]["Working"]["state"] == "ok"
+
+
+def test_single_source_entries_are_not_tagged(tmp_path, loop) -> None:
+    # With one receiver a source column would be noise on every line.
+    wav = tmp_path / "net.wav"
+    write_net_wav(wav, transmissions=2)
+    pipeline, store = build(tmp_path, loop, SlowStub(), wav=str(wav))
+
+    run_to_completion(pipeline, store, expected=2)
+
+    assert all(entry.source == "" for entry in store.entries)

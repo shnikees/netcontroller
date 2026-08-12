@@ -103,6 +103,22 @@
     background: #2a3140; color: var(--text);
     border: 1px solid var(--accent); border-radius: 6px; padding: 0.25rem;
   }
+  .src-mark {
+    display: inline-block; margin-left: 0.4rem; padding: 0.05rem 0.4rem;
+    font-size: 0.65rem; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid var(--accent); border-radius: 999px;
+    cursor: pointer;
+  }
+  .src-mark:hover { background: var(--accent); color: #0d1017; }
+  #sources { margin-bottom: 1.25rem; }
+  #sources[hidden] { display: none; }
+  .source-item {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.35rem 0.5rem; border-radius: 6px; cursor: pointer;
+    font-size: 0.95rem; color: var(--text);
+  }
+  .source-item:hover { background: #232a36; }
+  .source-item.selected { background: #2f3a4d; }
   .late-mark {
     display: block; font-size: 0.65rem; color: var(--unmatched);
     text-transform: uppercase; letter-spacing: 0.06em;
@@ -152,6 +168,7 @@
 <div id="banner" hidden></div>
 <div class="layout">
   <aside>
+    <div id="sources" hidden></div>
     <h2>Roster</h2>
     <div id="roster"></div>
   </aside>

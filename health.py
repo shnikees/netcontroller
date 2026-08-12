@@ -244,7 +244,11 @@ class HealthMonitor:
                         else "Audio capture is not running",
                     )
                 )
-            elif since_frame is not None and since_frame > self.stall_after_s:
+            elif (
+                self._capturing
+                and since_frame is not None
+                and since_frame > self.stall_after_s
+            ):
                 issues.append(
                     (
                         ERROR,
@@ -252,7 +256,11 @@ class HealthMonitor:
                         "-- check SDR++/GQRX and the loopback sink",
                     )
                 )
-            elif since_signal is not None and since_signal > self.silence_after_s:
+            elif (
+                self._capturing
+                and since_signal is not None
+                and since_signal > self.silence_after_s
+            ):
                 issues.append(
                     (
                         WARNING,
@@ -303,3 +311,79 @@ class HealthMonitor:
                 spill_pending=self._spill_pending,
                 last_error=self._last_error,
             )
+
+
+@dataclass
+class HealthFleet:
+    """Per-source monitors plus one combined verdict for the dashboard.
+
+    With two receivers, "the pipeline is unhealthy" is not actionable -- the
+    operator needs to know *which* one to go and look at. So issues are
+    prefixed with the source name whenever more than one source exists, and the
+    overall state is the worst of them.
+    """
+
+    stall_after_s: float = 5.0
+    silence_after_s: float = 300.0
+    silence_rms: float = 15.0
+    clock: Callable[[], float] = time.monotonic
+    _monitors: dict[str, HealthMonitor] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def monitor(self, name: str) -> HealthMonitor:
+        with self._lock:
+            if name not in self._monitors:
+                self._monitors[name] = HealthMonitor(
+                    stall_after_s=self.stall_after_s,
+                    silence_after_s=self.silence_after_s,
+                    silence_rms=self.silence_rms,
+                    clock=self.clock,
+                )
+            return self._monitors[name]
+
+    @property
+    def names(self) -> list[str]:
+        with self._lock:
+            return list(self._monitors)
+
+    def note_spill(self, spilled: int, pending: int) -> None:
+        for monitor in list(self._monitors.values()):
+            monitor.note_spill(spilled, pending)
+
+    def note_error(self, message: str) -> None:
+        for monitor in list(self._monitors.values()):
+            monitor.note_error(message)
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            monitors = dict(self._monitors)
+        if not monitors:
+            return {"state": ERROR, "issues": ["No audio sources configured"], "sources": {}}
+
+        per_source = {name: m.snapshot() for name, m in monitors.items()}
+        multi = len(per_source) > 1
+        state = OK
+        issues: list[str] = []
+        for name, snapshot in per_source.items():
+            if _SEVERITY[snapshot.state] > _SEVERITY[state]:
+                state = snapshot.state
+            for issue in snapshot.issues:
+                issues.append(f"{name}: {issue}" if multi else issue)
+
+        combined = {
+            "state": state,
+            "issues": issues,
+            "sources": {name: s.to_dict() for name, s in per_source.items()},
+        }
+        # Totals across sources, so the header can show one set of numbers.
+        for key in ("frames", "clips", "transcriptions", "errors", "overflows"):
+            combined[key] = sum(getattr(s, key) for s in per_source.values())
+        combined["spill_pending"] = max(
+            (s.spill_pending for s in per_source.values()), default=0
+        )
+        combined["spilled"] = max((s.spilled for s in per_source.values()), default=0)
+        combined["capturing"] = any(s.capturing for s in per_source.values())
+        combined["signal_rms"] = max(
+            (s.signal_rms for s in per_source.values()), default=0.0
+        )
+        return combined

@@ -55,6 +55,7 @@ class SpilledClip:
     duration_ms: int
     sequence: int
     path: Path
+    source: str = ""
 
 
 class SpillStore:
@@ -76,7 +77,12 @@ class SpillStore:
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def write(
-        self, audio: np.ndarray, start_offset_ms: int, duration_ms: int, sequence: int
+        self,
+        audio: np.ndarray,
+        start_offset_ms: int,
+        duration_ms: int,
+        sequence: int,
+        source: str = "",
     ) -> Path | None:
         """Write one clip. Returns its path, or None if the write failed.
 
@@ -100,6 +106,7 @@ class SpillStore:
                         "sequence": sequence,
                         "start_offset_ms": start_offset_ms,
                         "duration_ms": duration_ms,
+                        "source": source,
                     }
                 ),
                 encoding="utf-8",
@@ -150,6 +157,7 @@ class SpillStore:
                     ),
                     sequence=int(meta.get("sequence", 0)),
                     path=path,
+                    source=str(meta.get("source", "")),
                 )
             except (OSError, wave.Error, ValueError) as exc:
                 # A half-written clip (power cut mid-spill) costs that clip only.

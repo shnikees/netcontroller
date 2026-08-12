@@ -48,6 +48,28 @@ class AudioConfig:
 
 
 @dataclass
+class SourceConfig:
+    """One receiver feeding the app.
+
+    A net often runs on more than one frequency at once -- the repeater plus a
+    simplex staging channel, say -- and net control needs both in one log.
+    Each source is an independent receiver: its own device, its own level, its
+    own health.
+    """
+
+    name: str = "Main"
+    """Shown on every line this source produces. Keep it short: 'Repeater'."""
+    device: str | None = None
+    channel: str = "mix"
+    gain: float = 1.0
+    enabled: bool = True
+    """Set false to keep a source configured but not opened tonight."""
+    file: str | None = None
+    """Replay a recording instead of opening a device. For tuning a
+    multi-receiver setup offline, the way --file does for a single one."""
+
+
+@dataclass
 class VadConfig:
     aggressiveness: int = 3
     silence_ms: int = 800
@@ -144,6 +166,8 @@ class LoggingConfig:
 @dataclass
 class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
+    sources: list[SourceConfig] = field(default_factory=list)
+    """Multiple receivers. Empty means use the single `audio:` block."""
     vad: VadConfig = field(default_factory=VadConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     roster: RosterConfig = field(default_factory=RosterConfig)
@@ -152,6 +176,25 @@ class Config:
     buffering: BufferingConfig = field(default_factory=BufferingConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     export_dir: str = "."
+
+
+def audio_sources(config: Config) -> list[SourceConfig]:
+    """The sources to open, however they were configured.
+
+    A single-input `audio:` block stays valid -- it is the common case, and
+    breaking existing configs to add a feature most operators will not use
+    would be a poor trade.
+    """
+    if config.sources:
+        return [s for s in config.sources if s.enabled]
+    return [
+        SourceConfig(
+            name="Main",
+            device=config.audio.device,
+            channel=config.audio.channel,
+            gain=config.audio.gain,
+        )
+    ]
 
 
 def load_config(path: str | Path | None) -> Config:
@@ -185,6 +228,13 @@ def _build(data: dict) -> Config:
         if f.name not in data:
             continue
         value = data[f.name]
+        if f.name == "sources":
+            known = {sf.name for sf in fields(SourceConfig)}
+            kwargs[f.name] = [
+                SourceConfig(**{k: v for k, v in (item or {}).items() if k in known})
+                for item in (value or [])
+            ]
+            continue
         section = _SECTIONS.get(f.name)
         if section is not None:
             known = {sf.name for sf in fields(section)}

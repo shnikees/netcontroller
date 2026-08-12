@@ -125,6 +125,34 @@ Sample rate is handled for you. Mics and USB sound cards typically run at
 44.1 kHz, which is resampled to the 16 kHz Whisper wants (via `soxr`, with a
 built-in fallback if it is not installed).
 
+### Multiple receivers
+
+A net often runs on more than one frequency at once — the repeater plus a
+simplex staging channel. List them under `sources:` and both land in one log:
+
+```yaml
+sources:
+  - name: Repeater
+    device: repeater_sink.monitor
+  - name: Simplex
+    device: simplex_sink.monitor
+    channel: left
+```
+
+Every line is tagged with the receiver that heard it, and the sidebar grows a
+per-source health panel — click a source to filter the log to it, which
+composes with the callsign filter. Sources are captured independently, so a
+receiver that drops does not take the net down with it; the banner names the
+one that broke.
+
+They share a single Whisper model on purpose. It is the memory-hungry part,
+and two on a Pi would thrash rather than go faster; serialising costs a little
+latency on a busy net and nothing at all on a quiet one. The single `audio:`
+block still works and stays the common case.
+
+To tune a two-receiver setup without radios, give each source a `file:` instead
+of a `device:`.
+
 ### Feeding audio in from an SDR
 
 Create a null sink and point SDR++/GQRX's output at it, then have this app read
@@ -306,7 +334,7 @@ The page reconnects on its own if the app restarts.
 .venv/bin/python -m pytest
 ```
 
-156 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+162 tests, all offline, no audio hardware needed. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 
@@ -353,7 +381,6 @@ version, your changes have to be available under the GPL too.
 - Voice only (FM/SSB). No CW, no digital modes.
 - One transmission is assumed to be one speaker, which holds for a half-duplex
   net and not much else.
-- Single audio input. Two repeaters would need two instances on different ports.
 - The confidence figure comes from Whisper's `avg_logprob`. It is a useful
   relative cue and not a calibrated probability.
 - Transcripts live in memory for the session; export before you close it.

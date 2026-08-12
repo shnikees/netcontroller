@@ -51,6 +51,8 @@ class TranscriptEntry:
     """True when a previously learned correction produced this match."""
     late: bool = False
     """Transcribed from the disk backlog, after the transmission had passed."""
+    source: str = ""
+    """Which receiver heard it, when more than one is configured."""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -76,6 +78,7 @@ class TranscriptStore:
         unmatched_reason: str = "",
         via_alias: bool = False,
         late: bool = False,
+        source: str = "",
     ) -> TranscriptEntry:
         entry = TranscriptEntry(
             id=self._next_id,
@@ -91,6 +94,7 @@ class TranscriptStore:
             unmatched_reason=unmatched_reason,
             via_alias=via_alias,
             late=late,
+            source=source,
         )
         self._next_id += 1
         # Keep the log in transmission order. A clip recovered from the disk
@@ -153,6 +157,7 @@ class TranscriptStore:
             f"{len(self.check_ins())} stations",
             "",
         ]
+        multi = len({e.source for e in self.entries if e.source}) > 1
         for entry in self.entries:
             who = entry.matched_callsign if entry.matched else "UNMATCHED"
             if entry.matched and entry.operator_name:
@@ -160,7 +165,8 @@ class TranscriptStore:
             if entry.corrected:
                 was = entry.original_callsign or "unmatched"
                 who = f"{who} [corrected from {was}]"
-            lines.append(f"[{entry.timestamp}] {who}: {entry.raw_text}")
+            where = f" ({entry.source})" if multi and entry.source else ""
+            lines.append(f"[{entry.timestamp}]{where} {who}: {entry.raw_text}")
         lines += ["", "Check-ins: " + ", ".join(self.check_ins())]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path

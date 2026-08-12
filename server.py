@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 from callsign_match import CallsignMatcher, RosterEntry
 from feedback import FeedbackLog, record_correction
-from health import HealthMonitor
+from health import HealthFleet
 from transcript_store import TranscriptStore
 
 log = logging.getLogger(__name__)
@@ -75,7 +75,8 @@ def create_app(
     export_dir: str = ".",
     matcher: CallsignMatcher | None = None,
     feedback: FeedbackLog | None = None,
-    health: HealthMonitor | None = None,
+    health: HealthFleet | None = None,
+    sources: list[str] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Ham Net STT")
     by_callsign = {e.callsign: e for e in roster}
@@ -104,6 +105,7 @@ def create_app(
                     {"callsign": e.callsign, "name": e.name} for e in roster
                 ],
                 "check_ins": store.check_ins(),
+                "sources": sources or [],
             }
         )
 
@@ -175,7 +177,7 @@ def create_app(
             return JSONResponse({"state": "unknown", "issues": []})
         snapshot = health.snapshot()
         return JSONResponse(
-            snapshot.to_dict(), status_code=503 if snapshot.state == "error" else 200
+            snapshot, status_code=503 if snapshot["state"] == "error" else 200
         )
 
     @app.get("/api/aliases")
@@ -202,7 +204,7 @@ def create_app(
                 {
                     "type": "history",
                     "entries": store.all(),
-                    "health": health.snapshot().to_dict() if health else None,
+                    "health": health.snapshot() if health else None,
                 }
             )
             while True:

@@ -40,8 +40,8 @@ Four contexts, and the boundaries between them are the design:
 
 | Context | Work | Speed |
 | --- | --- | --- |
-| PortAudio callback | resample, write to ring buffer | real-time, never allocates |
-| Capture thread (`Pipeline._run`) | ring → frames → VAD → clip queue | cheap, always keeps up |
+| PortAudio callback (one per source) | resample, write to ring buffer | real-time, never allocates |
+| Capture thread (one per source, `SourceCapture._run`) | ring → frames → VAD → clip queue | cheap, always keeps up |
 | STT thread (`_transcribe_loop`) | Whisper → matcher → store | slow, allowed to fall behind |
 | Main thread | asyncio + uvicorn: HTTP, websockets, watchdog | must stay responsive |
 
@@ -160,9 +160,15 @@ file into it. Unknown YAML keys are ignored rather than fatal.
 
 ## Design decisions
 
-**Single input.** Two repeaters would mean two instances on two ports. Sharing
-one process would mean interleaving transmissions from different nets in one
-log, which is not what a net control operator wants to read.
+**Multiple sources, one transcriber.** Each receiver gets its own capture
+thread, ring buffer, VAD, and health monitor — a dead simplex rig must not make
+the repeater look broken, and the operator needs to know which one to go and
+fix. But they share one Whisper model: it is the memory-hungry component, and
+two instances on a Pi would thrash rather than parallelise. Clips from all
+sources queue together and are transcribed in arrival order.
+
+Entries are tagged with their source only when more than one is configured —
+a source column on every line of a single-receiver net is noise.
 
 **In-memory transcripts.** This is a session tool, not an archive. A database
 would add a dependency and a migration story for something that gets exported

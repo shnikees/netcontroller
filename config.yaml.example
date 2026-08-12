@@ -23,6 +23,28 @@ audio:
   # (try 0.3-0.5). Check the level in the dashboard banner rather than guessing.
   gain: 1.0
 
+# Multiple receivers, when a net runs on more than one frequency at once --
+# a repeater plus a simplex staging channel, say. Leave this out entirely to
+# use the single `audio:` block above; that stays the common case.
+#
+# Each source is captured independently, with its own health, so a dead
+# receiver does not take the net down. They share one Whisper model: it is the
+# memory-hungry part, and two on a Pi would thrash rather than go faster.
+#
+# sources:
+#   - name: Repeater          # shown on every line this source produces
+#     device: repeater_sink.monitor
+#     gain: 1.0
+#   - name: Simplex
+#     device: simplex_sink.monitor
+#     channel: left
+#   - name: Spare
+#     device: "USB Audio CODEC"
+#     enabled: false          # configured, not opened tonight
+#
+# `file:` replays a recording instead of opening a device, so a two-receiver
+# setup can be tuned offline the way --file does for one.
+
 vad:
   # webrtcvad 0-3. 3 is the most aggressive at rejecting non-speech, which
   # suits a squelched receiver feed with hiss between transmissions.

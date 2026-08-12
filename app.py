@@ -51,9 +51,9 @@ import uvicorn
 from audio_capture import TARGET_RATE, AudioCapture, list_devices
 from callsign_match import CallsignMatcher, load_roster
 from clip_spill import SpillStore
-from config import Config, load_config
+from config import Config, SourceConfig, audio_sources, load_config
 from feedback import FeedbackLog
-from health import ERROR, OK, WARNING, HealthMonitor
+from health import ERROR, OK, WARNING, HealthFleet, HealthMonitor
 from logging_setup import setup_logging
 from resample import Resampler, describe
 from server import Broadcaster, create_app
@@ -68,48 +68,35 @@ class AudioUnavailable(RuntimeError):
     """The capture device could not be opened; the message is operator-facing."""
 
 
-class Pipeline:
-    """Owns the capture thread and turns clips into transcript entries."""
+class SourceCapture:
+    """One receiver: device -> ring buffer -> VAD -> the shared clip queue.
+
+    Each source runs its own thread and its own health, so a dead simplex
+    receiver does not make the repeater look broken -- and the operator can see
+    which one to go and fix.
+    """
 
     def __init__(
         self,
+        source: SourceConfig,
         config: Config,
-        store: TranscriptStore,
-        matcher: CallsignMatcher,
-        broadcaster: Broadcaster,
-        loop: asyncio.AbstractEventLoop,
         health: HealthMonitor,
+        submit,
+        session_start: datetime,
         wav_path: str | None = None,
     ) -> None:
+        self.source = source
         self.config = config
-        self.store = store
-        self.matcher = matcher
-        self.broadcaster = broadcaster
-        self.loop = loop
         self.health = health
-        self.wav_path = wav_path
+        self.submit = submit
+        self.session_start = session_start
+        # A per-source recording wins over the global --file, so a two-receiver
+        # setup can be replayed from two files at once.
+        self.wav_path = source.file or wav_path
+
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._stt_thread: threading.Thread | None = None
         self._capture: AudioCapture | None = None
-        self._sequence = 0
-        self._session_start = datetime.now()
-
-        # Bounded on purpose. Past this depth the backlog goes to disk, where it
-        # is not competing for memory on a 2 GB Pi.
-        self._clips: queue.Queue = queue.Queue(maxsize=config.buffering.clip_queue_max)
-        self.spill = SpillStore(
-            config.buffering.spill_dir, max_clips=config.buffering.spill_max_clips
-        )
-
-        self.stt = SttWorker(
-            model_size=config.whisper.model_size,
-            device=config.whisper.device,
-            compute_type=config.whisper.compute_type,
-            beam_size=config.whisper.beam_size,
-            language=config.whisper.language,
-            initial_prompt=matcher.hotwords(config.whisper.vocabulary),
-        )
         self.segmenter = VadSegmenter(
             frame_ms=config.audio.frame_ms,
             aggressiveness=config.vad.aggressiveness,
@@ -120,51 +107,32 @@ class Pipeline:
             trigger_ratio=config.vad.trigger_ratio,
         )
 
-    # -- lifecycle ---------------------------------------------------------
+    @property
+    def name(self) -> str:
+        return self.source.name
 
     def start(self) -> None:
-        self.stt.load()
-        if self.config.buffering.spill_enabled:
-            cleared = self.spill.clear()
-            if cleared:
-                log.info("Cleared %d clip(s) left over from a previous run", cleared)
-        self._stt_thread = threading.Thread(
-            target=self._transcribe_loop, name="stt", daemon=True
+        self._thread = threading.Thread(
+            target=self._run, name=f"capture:{self.name}", daemon=True
         )
-        self._stt_thread.start()
-        self._thread = threading.Thread(target=self._run, name="capture", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
         if self._capture is not None:
             self._capture.stop()
-        self._clips.put(None)  # release the STT thread from its wait
-        for thread in (self._thread, self._stt_thread):
-            if thread is not None:
-                thread.join(timeout=5)
-
-    def drain(self, timeout: float = 30.0) -> int:
-        """Wait for the backlog to finish. Used at shutdown so a spilled clip
-        still makes it into the exported log."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self._clips.empty() and self.spill.pending() == 0:
-                return 0
-            time.sleep(0.2)
-        return self._clips.qsize() + self.spill.pending()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
 
     # -- worker thread -----------------------------------------------------
 
     def _run(self) -> None:
-        """Supervise the capture chain, restarting it when the device drops.
+        """Supervise this source, restarting it when its device drops.
 
-        A USB SDR replugged mid-net, or a loopback sink that disappears when the
-        SDR app restarts, should cost a few seconds of the net -- not the rest
-        of it. File replay never restarts: reaching the end is success, and
-        retrying would loop the recording forever.
+        A USB SDR replugged mid-net should cost a few seconds of one channel --
+        not the rest of the net, and not the other receivers. File replay never
+        restarts: reaching the end is success, and retrying would loop forever.
         """
-        session_start = self._session_start
         delay = self.config.health.restart_delay_s
 
         while not self._stop.is_set():
@@ -177,32 +145,37 @@ class Pipeline:
                 for clip in self.segmenter.segment(self._watch(frames)):
                     if self._stop.is_set():
                         break
-                    self._enqueue(clip)
+                    clip.source = self.name
+                    self.submit(clip)
                 if self.wav_path or self._stop.is_set():
                     self.health.capture_finished()
                     return
                 self.health.capture_stopped()
-                log.warning("Audio stream ended unexpectedly")
+                log.warning("[%s] Audio stream ended unexpectedly", self.name)
             except AudioUnavailable as exc:
                 # The dashboard stays up so the operator can read the error and
-                # the session log so far; only capture is down.
+                # the session log so far; only this source is down.
                 self.health.capture_failed(str(exc))
-                log.error("%s", exc)
+                log.error("[%s] %s", self.name, exc)
                 if self.wav_path:
                     return
             except Exception as exc:
                 self.health.capture_failed(f"{type(exc).__name__}: {exc}")
-                log.exception("Capture pipeline failed")
+                log.exception("[%s] Capture failed", self.name)
                 if self.wav_path:
                     return
 
             if not self.config.health.restart_capture:
-                log.error("Capture restart disabled; audio will stay down")
+                log.error("[%s] Restart disabled; this source stays down", self.name)
                 return
             self._close_capture()
             if self._stop.wait(delay):
                 return
-            log.info("Restarting audio capture (retry in %.0fs if it fails)", delay)
+            log.info(
+                "[%s] Restarting capture (retry in %.0fs if it fails)",
+                self.name,
+                delay,
+            )
             delay = min(delay * 2, self.config.health.restart_max_delay_s)
 
     def _watch(self, frames):
@@ -211,13 +184,14 @@ class Pipeline:
 
         for index, frame in enumerate(frames):
             samples = np.frombuffer(frame, dtype=np.int16)
-            rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2))) if len(
-                samples
-            ) else 0.0
+            rms = (
+                float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+                if len(samples)
+                else 0.0
+            )
             self.health.note_frame(rms)
             if self._capture is not None and index % 100 == 0:
                 self.health.note_overflows(self._capture.overflows)
-                self.health.note_spill(self.spill.spilled, self.spill.pending())
             yield frame
 
     def _close_capture(self) -> None:
@@ -231,10 +205,10 @@ class Pipeline:
     def _live_frames(self):
         try:
             self._capture = AudioCapture(
-                device=self.config.audio.device,
+                device=self.source.device,
                 frame_ms=self.config.audio.frame_ms,
-                channel=self.config.audio.channel,
-                gain=self.config.audio.gain,
+                channel=self.source.channel,
+                gain=self.source.gain,
                 buffer_seconds=self.config.buffering.ring_seconds,
             )
             self._capture.start()
@@ -244,14 +218,14 @@ class Pipeline:
             # different UID. Say so instead of printing a PortAudio traceback.
             raise AudioUnavailable(
                 f"Could not open audio input "
-                f"{self.config.audio.device or '(system default)'}: {exc}\n"
+                f"{self.source.device or '(system default)'}: {exc}\n"
                 "  - `python app.py --list-devices` shows what this host can see.\n"
-                "  - Check SDR++/GQRX is running and feeding the loopback sink.\n"
+                "  - Check the receiver is running and feeding the loopback sink.\n"
                 "  - In a container, check $XDG_RUNTIME_DIR/pulse is mounted and "
                 "the container UID matches the host user's."
             ) from exc
         self.health.capture_started()
-        log.info("Capturing from %s", self._capture.describe())
+        log.info("[%s] Capturing from %s", self.name, self._capture.describe())
         return self._capture.frames()
 
     def _wav_frames(self, path: str):
@@ -271,7 +245,11 @@ class Pipeline:
             # way to have the tuning step skipped.
             resampler = Resampler(rate, TARGET_RATE)
             log.info(
-                "Replaying %s: %s, %d ch", path, describe(rate, TARGET_RATE), channels
+                "[%s] Replaying %s: %s, %d ch",
+                self.name,
+                path,
+                describe(rate, TARGET_RATE),
+                channels,
             )
 
             frame_bytes = int(TARGET_RATE * self.config.audio.frame_ms / 1000) * 2
@@ -297,12 +275,118 @@ class Pipeline:
                 if finished:
                     return
 
+
+class Pipeline:
+    """All configured sources, feeding one shared transcriber.
+
+    One Whisper model, deliberately. It is the memory-hungry part, and two
+    receivers on a Pi would thrash rather than go faster; serialising them
+    costs a little latency on a busy net and nothing at all on a quiet one.
+    """
+
+    def __init__(
+        self,
+        config: Config,
+        store: TranscriptStore,
+        matcher: CallsignMatcher,
+        broadcaster: Broadcaster,
+        loop: asyncio.AbstractEventLoop,
+        fleet: HealthFleet,
+        wav_path: str | None = None,
+    ) -> None:
+        self.config = config
+        self.store = store
+        self.matcher = matcher
+        self.broadcaster = broadcaster
+        self.loop = loop
+        self.fleet = fleet
+        self._stop = threading.Event()
+        self._stt_thread: threading.Thread | None = None
+        self._sequence = 0
+        self._sequence_lock = threading.Lock()
+        self._session_start = datetime.now()
+
+        # Bounded on purpose. Past this depth the backlog goes to disk, where it
+        # is not competing for memory on a 2 GB Pi.
+        self._clips: queue.Queue = queue.Queue(maxsize=config.buffering.clip_queue_max)
+        self.spill = SpillStore(
+            config.buffering.spill_dir, max_clips=config.buffering.spill_max_clips
+        )
+
+        self.stt = SttWorker(
+            model_size=config.whisper.model_size,
+            device=config.whisper.device,
+            compute_type=config.whisper.compute_type,
+            beam_size=config.whisper.beam_size,
+            language=config.whisper.language,
+            initial_prompt=matcher.hotwords(config.whisper.vocabulary),
+        )
+
+        self.sources = [
+            SourceCapture(
+                source=source,
+                config=config,
+                health=fleet.monitor(source.name),
+                submit=self._enqueue,
+                session_start=self._session_start,
+                wav_path=wav_path,
+            )
+            for source in audio_sources(config)
+        ]
+
+    @property
+    def multi_source(self) -> bool:
+        return len(self.sources) > 1
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def start(self) -> None:
+        self.stt.load()
+        if self.config.buffering.spill_enabled:
+            cleared = self.spill.clear()
+            if cleared:
+                log.info("Cleared %d clip(s) left over from a previous run", cleared)
+        self._stt_thread = threading.Thread(
+            target=self._transcribe_loop, name="stt", daemon=True
+        )
+        self._stt_thread.start()
+        for source in self.sources:
+            source.start()
+        log.info(
+            "Listening on %d source(s): %s",
+            len(self.sources),
+            ", ".join(s.name for s in self.sources),
+        )
+
+    def stop(self) -> None:
+        self._stop.set()
+        for source in self.sources:
+            source.stop()
+        self._clips.put(None)  # release the STT thread from its wait
+        if self._stt_thread is not None:
+            self._stt_thread.join(timeout=5)
+
+    def drain(self, timeout: float = 30.0) -> int:
+        """Wait for the backlog to finish. Used at shutdown so a spilled clip
+        still makes it into the exported log."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._clips.empty() and self.spill.pending() == 0:
+                return 0
+            time.sleep(0.2)
+        return self._clips.qsize() + self.spill.pending()
+
     # -- clip queue, spill, and transcription ------------------------------
 
     def _enqueue(self, clip) -> None:
-        """Hand a clip to the STT thread, spilling to disk if it is behind."""
-        self._sequence += 1
-        clip.sequence = self._sequence
+        """Hand a clip to the STT thread, spilling to disk if it is behind.
+
+        Called from every source thread, so the sequence counter is locked.
+        """
+        with self._sequence_lock:
+            self._sequence += 1
+            clip.sequence = self._sequence
+
         try:
             self._clips.put_nowait(clip)
             return
@@ -310,23 +394,29 @@ class Pipeline:
             pass
 
         if not self.config.buffering.spill_enabled:
-            self.health.note_error("clip dropped: transcriber is too far behind")
+            self.fleet.note_error("clip dropped: transcriber is too far behind")
             log.error(
-                "Clip queue full and spilling disabled -- dropped %.1fs of audio",
+                "[%s] Clip queue full and spilling disabled -- dropped %.1fs of audio",
+                clip.source,
                 clip.duration_ms / 1000,
             )
             return
 
         path = self.spill.write(
-            clip.audio, clip.start_offset_ms, clip.duration_ms, self._sequence
+            clip.audio,
+            clip.start_offset_ms,
+            clip.duration_ms,
+            clip.sequence,
+            source=clip.source,
         )
         if path is None:
-            self.health.note_error("clip lost: could not spill to disk")
+            self.fleet.note_error("clip lost: could not spill to disk")
             return
-        self.health.note_spill(self.spill.spilled, self.spill.pending())
+        self.fleet.note_spill(self.spill.spilled, self.spill.pending())
         log.warning(
-            "Transcriber is behind; spilled clip %d (%.1fs) to %s",
-            self._sequence,
+            "[%s] Transcriber is behind; spilled clip %d (%.1fs) to %s",
+            clip.source,
+            clip.sequence,
             clip.duration_ms / 1000,
             path.name,
         )
@@ -346,7 +436,7 @@ class Pipeline:
                 continue
             if clip is None:
                 return
-            self._handle_clip(clip, self._session_start, late=False)
+            self._handle_clip(clip, late=False)
 
     def _drain_one_spilled(self) -> None:
         if not self.config.buffering.spill_enabled:
@@ -359,23 +449,25 @@ class Pipeline:
             start_offset_ms=spilled.start_offset_ms,
             duration_ms=spilled.duration_ms,
             sequence=spilled.sequence,
+            source=spilled.source,
         )
         log.info("Catching up: transcribing spilled clip %d", spilled.sequence)
-        self._handle_clip(clip, self._session_start, late=True)
-        self.health.note_spill(self.spill.spilled, self.spill.pending())
+        self._handle_clip(clip, late=True)
+        self.fleet.note_spill(self.spill.spilled, self.spill.pending())
 
-    def _handle_clip(self, clip, session_start: datetime, late: bool = False) -> None:
-        started_at = session_start + timedelta(milliseconds=clip.start_offset_ms)
-        self.health.note_clip()
+    def _handle_clip(self, clip, late: bool = False) -> None:
+        started_at = self._session_start + timedelta(milliseconds=clip.start_offset_ms)
+        health = self.fleet.monitor(clip.source or self.sources[0].name)
+        health.note_clip()
         began = time.monotonic()
         try:
             transcription = self.stt.transcribe(clip.audio)
         except Exception as exc:
             # One bad clip must not take the pipeline down mid-net.
-            self.health.note_error(f"transcription failed: {exc}")
+            health.note_error(f"transcription failed: {exc}")
             log.exception("Transcription failed for %.1fs clip", clip.duration_ms / 1000)
             return
-        self.health.note_transcription(time.monotonic() - began, self._clips.qsize())
+        health.note_transcription(time.monotonic() - began, self._clips.qsize())
         if not transcription.text:
             log.debug("Empty transcription for %.1fs clip", clip.duration_ms / 1000)
             return
@@ -394,10 +486,12 @@ class Pipeline:
             unmatched_reason=result.reason,
             via_alias=result.via_alias,
             late=late,
+            source=clip.source if self.multi_source else "",
         )
         log.info(
-            "%s | %s | %s%s",
+            "%s |%s %s | %s%s",
             entry.timestamp,
+            f" [{clip.source}]" if self.multi_source else "",
             entry.matched_callsign or f"unmatched({entry.candidate or '-'})",
             entry.raw_text,
             " [late]" if late else "",
@@ -410,7 +504,7 @@ class Pipeline:
 
 async def watchdog(
     config: Config,
-    health: HealthMonitor,
+    fleet: HealthFleet,
     broadcaster: Broadcaster,
 ) -> None:
     """Poll health, announce changes, and log a periodic heartbeat.
@@ -421,22 +515,23 @@ async def watchdog(
     dashboard, which shows a banner and (optionally) beeps.
     """
     previous = OK
-    last_heartbeat = time.monotonic()
+    started = time.monotonic()
+    last_heartbeat = started
 
     while True:
         await asyncio.sleep(config.health.check_interval_s)
-        snapshot = health.snapshot()
+        snapshot = fleet.snapshot()
 
-        if snapshot.state != previous:
-            if snapshot.state == ERROR:
-                log.error("Pipeline unhealthy: %s", "; ".join(snapshot.issues))
-            elif snapshot.state == WARNING:
-                log.warning("Pipeline degraded: %s", "; ".join(snapshot.issues))
+        if snapshot["state"] != previous:
+            if snapshot["state"] == ERROR:
+                log.error("Pipeline unhealthy: %s", "; ".join(snapshot["issues"]))
+            elif snapshot["state"] == WARNING:
+                log.warning("Pipeline degraded: %s", "; ".join(snapshot["issues"]))
             else:
                 log.info("Pipeline healthy again")
-            previous = snapshot.state
+            previous = snapshot["state"]
 
-        await broadcaster.broadcast({"type": "health", "health": snapshot.to_dict()})
+        await broadcaster.broadcast({"type": "health", "health": snapshot})
 
         now = time.monotonic()
         if config.health.heartbeat_s and now - last_heartbeat >= config.health.heartbeat_s:
@@ -445,16 +540,21 @@ async def watchdog(
                 "Heartbeat: %s | up %.0fm | %d frames, %d clips, %d transcripts "
                 "| level %.0f RMS | last transcribe %.2fs | backlog %d"
                 "%s | %d dropped",
-                snapshot.state,
-                snapshot.uptime_s / 60,
-                snapshot.frames,
-                snapshot.clips,
-                snapshot.transcriptions,
-                snapshot.signal_rms,
-                snapshot.last_transcribe_s,
-                snapshot.backlog,
-                f" (+{snapshot.spill_pending} on disk)" if snapshot.spill_pending else "",
-                snapshot.overflows,
+                snapshot["state"],
+                (time.monotonic() - started) / 60,
+                snapshot["frames"],
+                snapshot["clips"],
+                snapshot["transcriptions"],
+                snapshot["signal_rms"],
+                max(
+                    (s["last_transcribe_s"] for s in snapshot["sources"].values()),
+                    default=0.0,
+                ),
+                max((s["backlog"] for s in snapshot["sources"].values()), default=0),
+                f" (+{snapshot['spill_pending']} on disk)"
+                if snapshot["spill_pending"]
+                else "",
+                snapshot["overflows"],
             )
 
 
@@ -498,7 +598,7 @@ async def run(config: Config, wav_path: str | None) -> None:
 
     store = TranscriptStore()
     broadcaster = Broadcaster()
-    health = HealthMonitor(
+    fleet = HealthFleet(
         stall_after_s=config.health.stall_after_s,
         silence_after_s=config.health.silence_after_s,
         silence_rms=config.health.silence_rms,
@@ -510,7 +610,8 @@ async def run(config: Config, wav_path: str | None) -> None:
         export_dir=config.export_dir,
         matcher=matcher,
         feedback=feedback,
-        health=health,
+        health=fleet,
+        sources=[s.name for s in audio_sources(config)],
     )
 
     pipeline = Pipeline(
@@ -519,11 +620,11 @@ async def run(config: Config, wav_path: str | None) -> None:
         matcher,
         broadcaster,
         asyncio.get_running_loop(),
-        health,
+        fleet,
         wav_path,
     )
     pipeline.start()
-    watch = asyncio.create_task(watchdog(config, health, broadcaster))
+    watch = asyncio.create_task(watchdog(config, fleet, broadcaster))
 
     server = uvicorn.Server(
         uvicorn.Config(

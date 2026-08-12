@@ -42,6 +42,10 @@ class Clip:
     start_offset_ms: int
     """Milliseconds from the start of the capture session."""
     duration_ms: int
+    source: str = ""
+    """Which receiver heard this. Empty when only one source is configured."""
+    sequence: int = 0
+    """Monotonic per session; orders the disk backlog."""
 
 
 @dataclass
