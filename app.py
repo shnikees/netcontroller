@@ -59,6 +59,7 @@ from feedback import FeedbackLog
 from health import ERROR, OK, WARNING, HealthFleet, HealthMonitor
 from logging_setup import setup_logging
 from resample import Resampler, describe
+import attendance as attendance_history
 import settings as settings_registry
 from server import Broadcaster, create_app
 from session_writer import SessionWriter, latest_session, read_session
@@ -364,6 +365,9 @@ class Pipeline:
         self._pending_model: str | None = None
         """A model change requested from the dashboard, applied between clips."""
 
+        # Who has actually turned up before, from the sessions already logged.
+        self.attendance = attendance_history.Attendance()
+
         # Voices, learned from clean matches and from operator corrections.
         self.voices = VoiceProfiles(
             path=config.voice.path,
@@ -404,6 +408,18 @@ class Pipeline:
 
     def start(self) -> None:
         self.stt.load()
+        self.attendance = attendance_history.load(
+            self.config.transcripts.dir, {e.callsign for e in self.matcher.roster}
+        )
+        if self.attendance.records:
+            log.info("Attendance: %s", attendance_history.summary(self.attendance))
+        if self.attendance.unknown:
+            # Reported, never adopted: a mis-transcription promoted to a
+            # station would bias decoding toward its own mistake.
+            log.info(
+                "Heard before but not on the roster: %s",
+                ", ".join(self.attendance.unknown[:8]),
+            )
         if self.config.voice.enabled:
             known = self.voices.load()
             if known:
@@ -523,7 +539,10 @@ class Pipeline:
             self._prompt_generation = len(heard)
         if source not in self._prompts:
             terms = self.matcher.bias_terms(
-                self.config.whisper.vocabulary, source=source, heard=heard
+                self.config.whisper.vocabulary,
+                source=source,
+                heard=heard,
+                attendance=self.attendance.for_source(source),
             )
             self._prompts[source] = self.stt.build_prompt(terms)
             log.debug(
@@ -657,6 +676,7 @@ class Pipeline:
             self.config.whisper.vocabulary,
             source=source,
             heard=set(self.store.check_ins()),
+            attendance=self.attendance.for_source(source),
         )
         try:
             better = worker.transcribe(audio, prompt=worker.build_prompt(terms))

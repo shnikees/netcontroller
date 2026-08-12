@@ -380,6 +380,16 @@ spelled callsign, rather than seven tokens per station), the net vocabulary,
 and as many callsigns as the budget allows — ordered by who is most likely to
 speak next.
 
+**1a. Who actually turns up.** Roster order says nothing about who is likely
+to speak next. The transcripts already record who was on the last few nets, so
+that is used to order the prompt instead — weighted by how often a station
+appears and how recently, since crews change. It needs no setup: it reads the
+sessions in `transcripts/` at startup and says what it found.
+
+A callsign that shows up in the logs but not the roster is *reported*, never
+adopted. Promoting a mis-transcription to a station would bias decoding toward
+its own mistake.
+
 **2. Per-frequency rosters.** With 20–50 stations on the repeater and another
 20–50 on simplex, no single prompt can cover both. The optional third column in
 `roster.csv` says which receivers a station is expected on:
@@ -701,7 +711,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-329 tests, all offline, no audio hardware needed — CI runs them on every push
+343 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

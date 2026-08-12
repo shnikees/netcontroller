@@ -68,6 +68,7 @@ code. `app.py` wires everything together and owns the process lifecycle.
 | `vad_segmenter.py` | One clip per transmission |
 | `clip_spill.py` | Disk overflow when the transcriber is behind |
 | `stt_worker.py` | faster-whisper wrapper |
+| `attendance.py` | Who turns up, learned from past sessions |
 | `callsign_match.py` | Normalizer + roster matcher — the domain logic |
 | `clip_split.py` | Splits a clip that caught two stations into separate lines |
 | `traffic.py` | Reads a traffic declaration off a transmission |
@@ -193,6 +194,23 @@ pooled over the clip, which makes it independent of what was said. Weaker than
 a trained speaker network and chosen so the app still installs on a Pi without
 a deep-learning runtime; with a high threshold and suggestion-only output, the
 weakness costs recall rather than correctness.
+
+### `attendance.py`
+
+The roster lists who might be on; the transcripts record who was. Since the
+prompt can only carry about 48 callsigns, the ordering matters, and roster
+order carries no information at all.
+
+Two factors: how often a station appears, and how recently, on a fixed decay
+so last month's regular outranks last season's. Talking twenty times in one
+session counts as attending once — an event net would otherwise rank whoever
+was busiest rather than whoever is likeliest to speak.
+
+The guardrail is that only roster callsigns are scored. Anything else seen in
+the logs is reported for a human to look at and never adopted, because a
+mis-transcription promoted to a station would then bias decoding toward its
+own mistake — the same reasoning that keeps voice suggestions and learned
+aliases from applying themselves.
 
 ### `clip_split.py`
 

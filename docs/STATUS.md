@@ -42,7 +42,7 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 329 offline tests. Segmentation, transcription, callsign matching,
+audio, with 343 offline tests. Segmentation, transcription, callsign matching,
 splitting a clip that caught two stations, corrections and alias learning,
 voice suggestions, multi-source capture, buffering and disk spill, live
 transcript writing, the watchdog, export, and the container image.
@@ -139,18 +139,7 @@ features:
 
 1. **Run a net.** Everything above is downstream of this.
 
-2. **Expected stations from history.** The roster is hand-maintained; the
-   transcripts already record who actually turns up. Deriving attendance from
-   past sessions gives a better prior for prompt biasing than roster order —
-   on an event net, frequency and recency beat "not yet heard from" — and it
-   keeps itself current as the crew changes.
-
-   `calibrate.load_entries()` already reads every past session, so the data is
-   in hand. The trap is auto-adding unknown callsigns: a mis-transcription that
-   became a "station" would then bias decoding toward its own mistake, so
-   anything not on the roster stays a suggestion for a human.
-
-3. **Benchmark alternatives to Whisper.** The highest-value item under "cycles
+2. **Benchmark alternatives to Whisper.** The highest-value item under "cycles
    go to transcription": Parakeet is faster *and* scores better on English, so
    it buys accuracy and headroom at the same time rather than trading one for
    the other. Riva adds real *word boosting*, which is a proper answer to the
@@ -162,7 +151,7 @@ features:
    the escalation design means a second engine can be tried on the hard lines
    before committing to it for the live ones.
 
-4. **A better voice embedder.** The current one is log-mel cepstral statistics
+3. **A better voice embedder.** The current one is log-mel cepstral statistics
    in numpy — 24 numbers describing average timbre, never trained to tell one
    speaker from another. It also conflates the voice with the *channel*, so a
    profile is really "Frank on his HT" and breaks when he checks in mobile.
@@ -184,11 +173,11 @@ features:
    `tools/rebuild_voices.py --compare` scores both embedders on identical
    audio.
 
-5. **Make matching source-aware.** Per-frequency rosters currently bias
+4. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
    would cut wrong matches on a 100-station roster — carefully, since people do
    turn up on the other frequency.
-6. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
+5. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
    The appeal is settling "what did they actually say" when the transcript
    itself is in doubt — but a race trailer already has several people talking,
    and playing a clip back into that room adds to the problem it is meant to
@@ -199,7 +188,7 @@ features:
    playback, but the stored clips make either possible. The clips kept for
    voice enrolment already prove the storage side works.
 
-7. **Review after the net, not during it.** Everything self-supervised is in
+6. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards

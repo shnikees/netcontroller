@@ -577,6 +577,7 @@ class CallsignMatcher:
         source: str = "",
         heard: set[str] | None = None,
         limit: int | None = None,
+        attendance: dict[str, float] | None = None,
     ) -> list[str]:
         """Terms to bias decoding, most valuable first.
 
@@ -598,6 +599,11 @@ class CallsignMatcher:
         3. Stations assigned to this source who already have.
         4. Everyone else, in case somebody turns up on the wrong frequency.
 
+        Within each group, stations are ordered by how often they have actually
+        turned up before (see attendance.py) -- roster order says nothing, and
+        on an event net where everyone speaks repeatedly, attendance is the
+        stronger signal of who is about to talk.
+
         The caller trims to whatever the token budget allows; this only decides
         the order. Matching still runs against the entire roster, so a station
         that never makes the prompt is still matched correctly -- they just do
@@ -607,9 +613,20 @@ class CallsignMatcher:
         mine = [e for e in self.roster if e.on_source(source)]
         others = [e for e in self.roster if not e.on_source(source)]
 
-        pending = [e.callsign for e in mine if e.callsign not in heard]
-        already = [e.callsign for e in mine if e.callsign in heard]
-        elsewhere = [e.callsign for e in others]
+        def expected_first(entries):
+            if not attendance:
+                return [e.callsign for e in entries]
+            return [
+                e.callsign
+                for e in sorted(
+                    entries,
+                    key=lambda e: (-attendance.get(e.callsign, 0.0), e.callsign),
+                )
+            ]
+
+        pending = expected_first([e for e in mine if e.callsign not in heard])
+        already = expected_first([e for e in mine if e.callsign in heard])
+        elsewhere = expected_first(others)
 
         terms = (
             PHONETIC_ALPHABET
