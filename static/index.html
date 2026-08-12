@@ -91,6 +91,29 @@
   .bar { display: inline-block; width: 3.5rem; height: 0.45rem; border-radius: 3px; background: #2c3340; margin-right: 0.4rem; vertical-align: middle; }
   .bar > span { display: block; height: 100%; border-radius: 3px; background: var(--matched); }
   .bar.low > span { background: var(--unmatched); }
+  /* Correction UI: the callsign cell is a click target on every row, so a
+     wrong match is as fixable as an unmatched one. */
+  td.call { cursor: pointer; }
+  td.call:hover { background: #232a36; }
+  td.call:hover .call-text::after {
+    content: " ✎"; color: var(--accent); font-weight: 400; font-size: 0.8rem;
+  }
+  td.call select {
+    font: inherit; font-size: 0.9rem; width: 100%;
+    background: #2a3140; color: var(--text);
+    border: 1px solid var(--accent); border-radius: 6px; padding: 0.25rem;
+  }
+  .corrected-mark {
+    display: block; font-size: 0.7rem; font-weight: 400; color: var(--muted);
+  }
+  .toast {
+    position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%);
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--accent); border-radius: 8px;
+    padding: 0.6rem 1rem; font-size: 0.9rem; z-index: 5;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+  }
+  .toast[hidden] { display: none; }
   .empty { color: var(--muted); padding: 2rem 0.5rem; }
   tr.new { animation: flash 1.2s ease-out; }
   @keyframes flash { from { background: rgba(111, 179, 255, 0.18); } to { background: transparent; } }
@@ -126,6 +149,7 @@
     <div class="empty" id="empty">Waiting for the first transmission…</div>
   </main>
 </div>
+<div class="toast" id="toast" hidden></div>
 <script src="/static/app.js"></script>
 </body>
 </html>

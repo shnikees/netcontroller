@@ -4,7 +4,7 @@
 .venv/bin/python -m pytest
 ```
 
-52 tests, all offline, no audio hardware, about a fifth of a second.
+74 tests, all offline, no audio hardware, under half a second.
 
 ## What each suite covers
 
@@ -13,6 +13,8 @@
 | `test_callsign_match.py` | Normalizer, candidate extraction, roster matching, threshold and ambiguity behaviour | Realistic messy strings, including verbatim Whisper output |
 | `test_vad_segmenter.py` | Clip boundaries: splitting, merging, min length, pre-roll, hangover trim, max length, end-of-stream flush | Scripted speech patterns through a stubbed VAD |
 | `test_transcript_store.py` | Session log, check-in list, CSV/text export | Direct |
+| `test_feedback.py` | Correction log, alias derivation, matcher applying aliases | Direct, plus a simulated truncated write |
+| `test_server.py` | HTTP API, mainly `/api/correct` | FastAPI `TestClient` |
 
 `test_vad_segmenter.py` deliberately stubs out webrtcvad. Whether webrtcvad
 correctly identifies speech is webrtcvad's problem; where the segmenter draws

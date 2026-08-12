@@ -17,10 +17,13 @@ vad_segmenter.py    webrtcvad state machine → one Clip per transmission
 stt_worker.py       faster-whisper → text + confidence
      │  Transcription(text, confidence, ...)
      ▼
-callsign_match.py   normalize → extract candidates → fuzzy match roster
-     │  MatchResult(matched, callsign, score, candidate, reason)
+callsign_match.py   learned aliases → normalize → extract → fuzzy match roster
+     │  MatchResult(matched, callsign, score, candidate, reason, via_alias)
      ▼
 transcript_store.py in-memory session log + CSV/text export
+     │                        ▲
+     │                        │ operator corrections (POST /api/correct)
+     │                  feedback.py -- append-only log, replayed into aliases
      │
      ▼
 server.py           FastAPI: GET /api/history, POST /api/export, WS /ws
@@ -75,6 +78,35 @@ will not notice a plausible wrong callsign in a scrolling log.
 The vocabulary tables (`PHONETIC_MAP`, `DIGIT_MAP`, `AMBIGUOUS_DIGIT_MAP`) are
 the main tuning surface. They are meant to grow as real nets surface new
 mis-transcriptions — see [TESTING.md](TESTING.md).
+
+### `feedback.py`
+
+The learning loop, such as it is. An operator correction does three things: fix
+the log line, append to `feedback.jsonl`, and teach the matcher that
+`candidate -> callsign`. The next transmission Whisper mangles the same way then
+matches on its own.
+
+One file is both the audit log and the alias source — aliases are derived by
+replaying the log at startup rather than stored separately, so there is no
+second file to drift out of sync with the record of what the operator said.
+JSON Lines, append-only: a write interrupted by a power cut costs one
+correction, not the whole history.
+
+Deliberate constraints, all tested:
+
+- Aliases may only point at roster callsigns, and stale ones are dropped when a
+  station leaves `roster.csv`. Otherwise last month's correction quietly
+  resurrects a station that is no longer on the net.
+- Candidates shorter than three characters are refused — `K7` would mis-fire
+  constantly.
+- An alias beats an `ambiguous` refusal. The operator heard the transmission;
+  the matcher only saw a string.
+
+This is also the labelled dataset. Each line pairs Whisper's output with a
+human-confirmed callsign, which is what a supervised fine-tuning run would
+consume. Nothing in the pipeline trains today — faster-whisper runs on
+CTranslate2, an inference-only runtime — so "learning" here means the alias
+table, not model weights.
 
 ### `vad_segmenter.py`
 

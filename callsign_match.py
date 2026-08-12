@@ -175,6 +175,8 @@ class MatchResult:
     runner_up_score: float = 0.0
     reason: str = ""
     """Why an unmatched result was rejected: no_candidate/below_threshold/ambiguous."""
+    via_alias: bool = False
+    """True when an operator correction, not fuzzy matching, produced this."""
 
 
 # --------------------------------------------------------------------------
@@ -204,6 +206,19 @@ def load_roster(path: str | Path) -> list[RosterEntry]:
 # --------------------------------------------------------------------------
 # Normalization
 # --------------------------------------------------------------------------
+
+
+def _split_hyphens(token: str) -> list[str]:
+    """Split hyphen-joined words, unless the hyphen belongs to the word itself.
+
+    Whisper hyphenates adjacent spelled-out words freely -- "kilo juliet
+    six-tango uniform victor" -- and treating that as one token loses both the
+    digit and the letter. But "x-ray" is a vocabulary entry in its own right, so
+    anything already in the tables is left alone.
+    """
+    if "-" not in token or token in PHONETIC_MAP or token in DIGIT_MAP:
+        return [token]
+    return [part for part in token.split("-") if part]
 
 
 def _split_glued_phonetics(token: str) -> list[str]:
@@ -248,8 +263,9 @@ def normalize(text: str) -> str:
 
     expanded: list[str] = []
     for token in raw_tokens:
-        for piece in _split_glued_phonetics(token):
-            expanded.append(piece)
+        for part in _split_hyphens(token):
+            for piece in _split_glued_phonetics(part):
+                expanded.append(piece)
 
     out: list[str] = []
     for i, token in enumerate(expanded):
@@ -343,10 +359,39 @@ class CallsignMatcher:
     roster: list[RosterEntry]
     threshold: float = 78.0
     ambiguity_margin: float = 5.0
+    aliases: dict[str, str] = field(default_factory=dict)
+    """Learned candidate -> callsign corrections, e.g. {"E3Z": "K7XYZ"}."""
     _by_callsign: dict[str, RosterEntry] = field(init=False, repr=False)
+
+    MIN_ALIAS_LENGTH = 3
+    """Shorter candidates carry too little signal to key a correction on."""
 
     def __post_init__(self) -> None:
         self._by_callsign = {e.callsign: e for e in self.roster}
+        # Drop aliases pointing at stations no longer on the roster; a stale
+        # alias would silently resurrect a callsign the operator removed.
+        self.aliases = {
+            candidate: callsign
+            for candidate, callsign in self.aliases.items()
+            if callsign in self._by_callsign
+        }
+
+    def learn_alias(self, candidate: str | None, callsign: str) -> bool:
+        """Record that `candidate` really means `callsign`. Returns whether it took.
+
+        Called from the web thread while the capture thread reads `aliases`.
+        Individual dict get/set are atomic under the GIL, and a correction that
+        lands mid-transmission simply applies to the next one, so no lock is
+        needed here.
+        """
+        if not candidate or len(candidate) < self.MIN_ALIAS_LENGTH:
+            return False
+        if callsign not in self._by_callsign:
+            return False
+        if candidate == callsign:
+            return False  # nothing to learn; fuzzy matching already gets this
+        self.aliases[candidate.upper()] = callsign
+        return True
 
     @property
     def callsigns(self) -> list[str]:
@@ -375,6 +420,20 @@ class CallsignMatcher:
         return best
 
     def _match_candidate(self, candidate: str) -> MatchResult:
+        # A learned correction is operator ground truth: it beats anything the
+        # fuzzy matcher would have concluded, including an "ambiguous" refusal.
+        learned = self.aliases.get(candidate)
+        if learned is not None:
+            entry = self._by_callsign[learned]
+            return MatchResult(
+                matched=True,
+                callsign=entry.callsign,
+                name=entry.name,
+                score=100.0,
+                candidate=candidate,
+                via_alias=True,
+            )
+
         scored = process.extract(
             candidate,
             self._by_callsign.keys(),

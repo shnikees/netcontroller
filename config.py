@@ -75,6 +75,10 @@ class RosterConfig:
     path: str = "roster.csv"
     threshold: float = 78.0
     ambiguity_margin: float = 5.0
+    feedback_path: str = "feedback.jsonl"
+    """Operator corrections. Replayed at startup so learned aliases persist."""
+    learn_aliases: bool = True
+    """Set false to log corrections without applying them to future matching."""
 
 
 @dataclass

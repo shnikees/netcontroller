@@ -225,6 +225,20 @@ def test_ordinals_stay_ordinals_outside_a_callsign(matcher: CallsignMatcher) -> 
     assert "1" not in normalize("the net meets the first tuesday of the month")
 
 
+def test_whisper_hyphenates_adjacent_spelled_words() -> None:
+    # Verbatim from a replay: the hyphen used to swallow both the 6 and the T,
+    # leaving no callsign-shaped token at all.
+    matcher = CallsignMatcher(roster=ROSTER + [RosterEntry("KJ6TUV", "Frank")])
+    result = matcher.match("kilo juliet six-tango uniform victor, frank checking in.")
+    assert result.matched
+    assert result.callsign == "KJ6TUV"
+
+
+def test_hyphenated_vocabulary_words_survive() -> None:
+    # ...but "x-ray" is itself a vocabulary entry and must not be split.
+    assert normalize("kilo seven x-ray yankee zulu") == "K7XYZ"
+
+
 def test_mangled_quebec_still_yields_a_full_candidate(
     matcher: CallsignMatcher,
 ) -> None:

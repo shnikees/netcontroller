@@ -58,6 +58,12 @@ roster:
   # If the runner-up is within this many points, the entry is flagged
   # unmatched rather than guessed at.
   ambiguity_margin: 5.0
+  # Operator corrections, appended as JSON Lines. Replayed at startup, so a
+  # station you fixed last week matches on its own tonight. Also the labelled
+  # dataset for any future fine-tuning -- back it up with your roster.
+  feedback_path: feedback.jsonl
+  # Set false to keep logging corrections without applying them to matching.
+  learn_aliases: true
 
 server:
   host: 0.0.0.0

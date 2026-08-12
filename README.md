@@ -20,7 +20,9 @@ Matched stations show in green with the operator's name; the roster sidebar
 lights up as stations check in. The amber line is the interesting case — an
 off-roster visitor, flagged rather than force-matched to the nearest roster
 entry, with the callsign the app heard shown so net control can resolve it by
-ear. (Screenshot uses the example roster and synthesized audio from
+ear. Clicking that cell sets the right station, and the app
+[learns the correction](#corrections-and-what-the-app-learns-from-them) for next
+time. (Screenshot uses the example roster and synthesized audio from
 `tools/make_test_audio.py`.)
 
 ## Status
@@ -171,6 +173,36 @@ Ordinals are handled the same way, because Whisper reliably turns a spoken
 digit between two phonetics into one ("november five delta" → "november fifth
 delta").
 
+### Corrections, and what the app learns from them
+
+Click any callsign in the dashboard and pick the right station. Three things
+happen:
+
+1. The log line is fixed, and marked `✓ corrected` — the export keeps a note of
+   what the matcher originally said, so the record still shows where it was
+   wrong.
+2. The correction is appended to `feedback.jsonl` (transcript, what was heard,
+   what it actually was).
+3. The matcher **learns the alias**, so the next time that station is mangled
+   the same way, it matches on its own.
+
+That third step is the point. If Whisper reliably hears `KJ6TUV` as `E3Z` on
+your repeater, you fix it once and the app has it from then on — including
+after a restart, since aliases are replayed from the log at startup.
+
+A learned match shows `✓ learned` rather than `✓ corrected`, so you can always
+tell which lines the machine got by itself and which came from an alias.
+
+Aliases only ever point at stations on your roster, are dropped automatically if
+you remove a station from `roster.csv`, and override even an "ambiguous"
+refusal — an operator's word beats the fuzzy matcher's. Set
+`roster.learn_aliases: false` to keep logging corrections without applying them.
+
+`feedback.jsonl` is also your labelled dataset: each line pairs Whisper's
+output with a human-confirmed callsign, which is exactly what a fine-tuning run
+would need later. Back it up alongside `roster.csv`; it is gitignored because
+it contains real net traffic.
+
 ### Tuning it for your net
 
 `test_callsign_match.py` has a "Regressions from real transcripts" section
@@ -198,7 +230,7 @@ The page reconnects on its own if the app restarts.
 .venv/bin/python -m pytest
 ```
 
-52 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+74 tests, all offline, no audio hardware needed. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 

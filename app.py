@@ -41,6 +41,7 @@ import uvicorn
 from audio_capture import TARGET_RATE, AudioCapture, list_devices
 from callsign_match import CallsignMatcher, load_roster
 from config import Config, load_config
+from feedback import FeedbackLog
 from server import Broadcaster, create_app
 from stt_worker import SttWorker
 from transcript_store import TranscriptStore
@@ -200,6 +201,7 @@ class Pipeline:
             clip_duration=clip.duration_ms / 1000,
             candidate=result.candidate,
             unmatched_reason=result.reason,
+            via_alias=result.via_alias,
         )
         log.info(
             "%s | %s | %s",
@@ -232,14 +234,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def run(config: Config, wav_path: str | None) -> None:
     roster = load_roster(config.roster.path)
     log.info("Loaded %d roster entries from %s", len(roster), config.roster.path)
+
+    feedback = FeedbackLog(config.roster.feedback_path)
+    aliases = feedback.aliases() if config.roster.learn_aliases else {}
     matcher = CallsignMatcher(
         roster=roster,
         threshold=config.roster.threshold,
         ambiguity_margin=config.roster.ambiguity_margin,
+        aliases=aliases,
     )
+    if matcher.aliases:
+        log.info(
+            "Replayed %d learned alias(es) from %s",
+            len(matcher.aliases),
+            config.roster.feedback_path,
+        )
+
     store = TranscriptStore()
     broadcaster = Broadcaster()
-    app = create_app(store, roster, broadcaster, export_dir=config.export_dir)
+    app = create_app(
+        store,
+        roster,
+        broadcaster,
+        export_dir=config.export_dir,
+        matcher=matcher,
+        feedback=feedback,
+    )
 
     pipeline = Pipeline(
         config, store, matcher, broadcaster, asyncio.get_running_loop(), wav_path

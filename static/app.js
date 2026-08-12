@@ -28,11 +28,14 @@ const scrollBtn = document.getElementById("scrollBtn");
 const clearFilterBtn = document.getElementById("clearFilter");
 const exportBtn = document.getElementById("exportBtn");
 
+const toast = document.getElementById("toast");
+
 let autoScroll = true;
 let filter = null;
 let roster = [];
 const counts = new Map();
 const entries = [];
+const rows = new Map(); // entry id -> <tr>, so a correction can update in place
 
 function fmtTime(iso) {
   const d = new Date(iso);
@@ -65,6 +68,38 @@ function setFilter(callsign) {
   renderRoster();
 }
 
+function callsignCellHTML(entry) {
+  if (!entry.matched) {
+    const why = entry.candidate
+      ? `heard “${entry.candidate}”`
+      : (entry.unmatched_reason || "").replace(/_/g, " ");
+    return `<span class="call-text">UNMATCHED</span><span class="reason">${why}</span>`;
+  }
+  const name = entry.operator_name ? `<span class="name">${entry.operator_name}</span>` : "";
+  const mark = entry.corrected
+    ? `<span class="corrected-mark">✓ corrected${entry.original_callsign ? ` from ${entry.original_callsign}` : ""}</span>`
+    : entry.via_alias
+      ? `<span class="corrected-mark">✓ learned</span>`
+      : "";
+  return `<span class="call-text">${entry.matched_callsign}</span>${name}${mark}`;
+}
+
+function paintRow(row, entry) {
+  row.dataset.callsign = entry.matched_callsign || "";
+  row.classList.toggle("unmatched", !entry.matched);
+  if (filter) row.classList.toggle("dim", row.dataset.callsign !== filter);
+
+  const pct = Math.round((entry.confidence || 0) * 100);
+  row.innerHTML =
+    `<td class="time">${fmtTime(entry.timestamp)}</td>` +
+    `<td class="call" title="Click to set the callsign">${callsignCellHTML(entry)}</td>` +
+    `<td class="text"></td>` +
+    `<td class="conf"><span class="bar${pct < 60 ? " low" : ""}"><span style="width:${pct}%"></span></span>${pct}%</td>`;
+  // Transcript text is model output, so set it as text rather than markup.
+  row.querySelector(".text").textContent = entry.raw_text;
+  row.querySelector(".call").onclick = () => openCorrection(row, entry);
+}
+
 function addEntry(entry, isNew) {
   entries.push(entry);
   if (entry.matched) {
@@ -72,29 +107,98 @@ function addEntry(entry, isNew) {
   }
 
   const row = document.createElement("tr");
-  row.dataset.callsign = entry.matched_callsign || "";
-  if (!entry.matched) row.classList.add("unmatched");
   if (isNew) row.classList.add("new");
-  if (filter && row.dataset.callsign !== filter) row.classList.add("dim");
+  paintRow(row, entry);
 
-  const who = entry.matched
-    ? `${entry.matched_callsign}${entry.operator_name ? `<span class="name">${entry.operator_name}</span>` : ""}`
-    : `UNMATCHED<span class="reason">${entry.candidate ? `heard “${entry.candidate}”` : entry.unmatched_reason.replace(/_/g, " ")}</span>`;
-
-  const pct = Math.round((entry.confidence || 0) * 100);
-  row.innerHTML =
-    `<td class="time">${fmtTime(entry.timestamp)}</td>` +
-    `<td class="call">${who}</td>` +
-    `<td class="text"></td>` +
-    `<td class="conf"><span class="bar${pct < 60 ? " low" : ""}"><span style="width:${pct}%"></span></span>${pct}%</td>`;
-  // Transcript text is model output, so set it as text rather than markup.
-  row.querySelector(".text").textContent = entry.raw_text;
-
+  rows.set(entry.id, row);
   log.appendChild(row);
   emptyEl.hidden = true;
   updateStats();
   renderRoster();
   if (autoScroll) window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+}
+
+/* Corrections -------------------------------------------------------------
+   Click a callsign cell, pick the right station. The server fixes the log
+   line, records the correction, and teaches the matcher the alias so the next
+   transmission from that station matches on its own. */
+
+function openCorrection(row, entry) {
+  const cell = row.querySelector(".call");
+  if (cell.querySelector("select")) return; // already open
+
+  const select = document.createElement("select");
+  select.innerHTML =
+    `<option value="">— pick station —</option>` +
+    roster
+      .map(
+        (s) =>
+          `<option value="${s.callsign}"${s.callsign === entry.matched_callsign ? " selected" : ""}>` +
+          `${s.callsign}${s.name ? ` — ${s.name}` : ""}</option>`
+      )
+      .join("");
+
+  cell.innerHTML = "";
+  cell.appendChild(select);
+  select.focus();
+
+  const close = () => paintRow(row, findEntry(entry.id) || entry);
+  select.onchange = () => (select.value ? submitCorrection(entry.id, select.value) : close());
+  select.onblur = () => setTimeout(close, 150);
+  select.onkeydown = (e) => {
+    if (e.key === "Escape") close();
+  };
+}
+
+function findEntry(id) {
+  return entries.find((e) => e.id === id);
+}
+
+async function submitCorrection(entryId, callsign) {
+  try {
+    const res = await fetch("/api/correct", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entry_id: entryId, callsign }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "correction failed");
+    applyCorrection(data.entry);
+    showToast(
+      data.learned
+        ? `${callsign} set — learned “${data.alias}”, future transmissions will match automatically`
+        : `${callsign} set`
+    );
+  } catch (err) {
+    showToast(`Could not save: ${err.message}`);
+    const entry = findEntry(entryId);
+    if (entry) paintRow(rows.get(entryId), entry);
+  }
+}
+
+/* Applied both to our own corrections and to ones broadcast from another
+   dashboard, so two operators never see different logs. */
+function applyCorrection(updated) {
+  const index = entries.findIndex((e) => e.id === updated.id);
+  const previous = index >= 0 ? entries[index] : null;
+  if (previous && previous.matched) {
+    counts.set(previous.matched_callsign, Math.max(0, (counts.get(previous.matched_callsign) || 1) - 1));
+  }
+  if (index >= 0) entries[index] = updated;
+  counts.set(updated.matched_callsign, (counts.get(updated.matched_callsign) || 0) + 1);
+
+  const row = rows.get(updated.id);
+  if (row) paintRow(row, updated);
+  updateStats();
+  renderRoster();
+}
+
+let toastTimer = null;
+function showToast(message) {
+  toast.textContent = message;
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (toast.hidden = true), 4000);
 }
 
 function updateStats() {
@@ -147,6 +251,8 @@ function connect() {
     const msg = JSON.parse(event.data);
     if (msg.type === "entry") {
       addEntry(msg.entry, true);
+    } else if (msg.type === "correction") {
+      applyCorrection(msg.entry);
     } else if (msg.type === "history" && entries.length === 0) {
       for (const entry of msg.entries) addEntry(entry, false);
     }

@@ -42,6 +42,12 @@ class TranscriptEntry:
     candidate: str | None = None
     """The callsign-shaped token heard, even when it matched nothing."""
     unmatched_reason: str = ""
+    corrected: bool = False
+    """True once an operator has confirmed or fixed the callsign by hand."""
+    original_callsign: str | None = None
+    """What the matcher concluded before the operator corrected it."""
+    via_alias: bool = False
+    """True when a previously learned correction produced this match."""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -65,6 +71,7 @@ class TranscriptStore:
         clip_duration: float,
         candidate: str | None = None,
         unmatched_reason: str = "",
+        via_alias: bool = False,
     ) -> TranscriptEntry:
         entry = TranscriptEntry(
             id=self._next_id,
@@ -78,9 +85,33 @@ class TranscriptStore:
             clip_duration=round(clip_duration, 2),
             candidate=candidate,
             unmatched_reason=unmatched_reason,
+            via_alias=via_alias,
         )
         self._next_id += 1
         self.entries.append(entry)
+        return entry
+
+    def get(self, entry_id: int) -> TranscriptEntry | None:
+        return next((e for e in self.entries if e.id == entry_id), None)
+
+    def correct(
+        self, entry_id: int, callsign: str, operator_name: str = ""
+    ) -> TranscriptEntry | None:
+        """Apply an operator correction to one entry.
+
+        `original_callsign` keeps whatever the matcher concluded, so the log
+        still shows where the machine was wrong -- that record is the point.
+        """
+        entry = self.get(entry_id)
+        if entry is None:
+            return None
+        if not entry.corrected:
+            entry.original_callsign = entry.matched_callsign
+        entry.matched = True
+        entry.matched_callsign = callsign
+        entry.operator_name = operator_name
+        entry.corrected = True
+        entry.unmatched_reason = ""
         return entry
 
     def all(self) -> list[dict]:
@@ -117,6 +148,9 @@ class TranscriptStore:
             who = entry.matched_callsign if entry.matched else "UNMATCHED"
             if entry.matched and entry.operator_name:
                 who = f"{who} ({entry.operator_name})"
+            if entry.corrected:
+                was = entry.original_callsign or "unmatched"
+                who = f"{who} [corrected from {was}]"
             lines.append(f"[{entry.timestamp}] {who}: {entry.raw_text}")
         lines += ["", "Check-ins: " + ", ".join(self.check_ins())]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")

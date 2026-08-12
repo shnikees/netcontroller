@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 config.yaml
 roster.csv
+feedback.jsonl
 net-log-*.csv
 net-log-*.txt
 net-log-*.json

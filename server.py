@@ -25,12 +25,19 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from callsign_match import RosterEntry
+from callsign_match import CallsignMatcher, RosterEntry
+from feedback import FeedbackLog, record_correction
 from transcript_store import TranscriptStore
 
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class CorrectionRequest(BaseModel):
+    entry_id: int
+    callsign: str
 
 
 class Broadcaster:
@@ -65,8 +72,11 @@ def create_app(
     roster: list[RosterEntry],
     broadcaster: Broadcaster,
     export_dir: str = ".",
+    matcher: CallsignMatcher | None = None,
+    feedback: FeedbackLog | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Ham Net STT")
+    by_callsign = {e.callsign: e for e in roster}
 
     @app.middleware("http")
     async def no_cache(request, call_next):  # noqa: ANN001, ANN202
@@ -94,6 +104,67 @@ def create_app(
                 "check_ins": store.check_ins(),
             }
         )
+
+    @app.post("/api/correct")
+    async def correct(payload: CorrectionRequest) -> JSONResponse:
+        """Apply an operator correction, and learn from it.
+
+        Three things happen, in order: the log line is fixed so the display is
+        right, the correction is appended to the feedback log, and the matcher
+        learns the alias so the *next* transmission from that station matches on
+        its own. The alias is what makes this worth clicking twice.
+        """
+        entry = store.get(payload.entry_id)
+        if entry is None:
+            return JSONResponse(
+                {"error": f"No entry {payload.entry_id}"}, status_code=404
+            )
+        callsign = payload.callsign.strip().upper()
+        if callsign not in by_callsign:
+            return JSONResponse(
+                {"error": f"{callsign} is not on the roster"}, status_code=400
+            )
+
+        was = entry.matched_callsign
+        candidate = entry.candidate
+        raw_text = entry.raw_text
+        station = by_callsign[callsign]
+        store.correct(payload.entry_id, callsign, station.name)
+
+        if feedback is not None:
+            record_correction(
+                feedback,
+                entry_id=payload.entry_id,
+                candidate=candidate,
+                from_callsign=was,
+                to_callsign=callsign,
+                raw_text=raw_text,
+                confidence=entry.confidence,
+                clip_duration=entry.clip_duration,
+            )
+
+        learned = False
+        if matcher is not None:
+            learned = matcher.learn_alias(candidate, callsign)
+        log.info(
+            "Correction: entry %d %s -> %s%s",
+            payload.entry_id,
+            was or "unmatched",
+            callsign,
+            f" (learned {candidate} -> {callsign})" if learned else "",
+        )
+
+        await broadcaster.broadcast(
+            {"type": "correction", "entry": entry.to_dict(), "learned": learned}
+        )
+        return JSONResponse(
+            {"entry": entry.to_dict(), "learned": learned, "alias": candidate}
+        )
+
+    @app.get("/api/aliases")
+    async def aliases() -> JSONResponse:
+        """What the matcher has learned so far, for inspection during a net."""
+        return JSONResponse({"aliases": matcher.aliases if matcher else {}})
 
     @app.post("/api/export")
     async def export() -> JSONResponse:
