@@ -59,6 +59,13 @@ ENV NETSTT_SERVER_HOST=0.0.0.0 \
 EXPOSE 8080
 VOLUME ["/app/logs"]
 
+# /api/health returns 503 when the pipeline is in error (device gone, audio
+# stalled), so the container is marked unhealthy instead of merely "up while
+# logging nothing".
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+    CMD python -c "import urllib.request,sys; \
+sys.exit(0 if urllib.request.urlopen('http://localhost:8080/api/health', timeout=4).status == 200 else 1)"
+
 # No --config: the image runs on defaults plus NETSTT_* env vars. Mount a file
 # at /app/config.yaml to override, and it is picked up automatically.
 CMD ["python", "app.py"]

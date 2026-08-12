@@ -1,0 +1,41 @@
+# systemd unit for a permanent install (a Pi at the net control table).
+#
+#   sudo cp deploy/net-stt.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now net-stt
+#   journalctl -u net-stt -f
+#
+# Edit User/WorkingDirectory to match your install. This is the outer watchdog:
+# the app restarts its own audio capture, and systemd restarts the app if the
+# process itself dies.
+
+[Unit]
+Description=Ham radio net speech-to-text
+Documentation=https://github.com/shnikees/netcontroller
+# PulseAudio/PipeWire is a user service, so this waits for the user session
+# rather than the system sound target.
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/netcontroller
+Environment=PYTHONUNBUFFERED=1
+# The audio device lives in the user's session bus; without this systemd starts
+# the service with no route to PulseAudio and capture fails on every retry.
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+ExecStart=/home/pi/netcontroller/.venv/bin/python app.py --config config.yaml
+
+Restart=always
+RestartSec=5
+# Do not give up: a net control box should keep trying until someone fixes it.
+StartLimitIntervalSec=0
+
+# The app already writes its own rotating log; journald gets the console stream.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

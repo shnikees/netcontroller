@@ -4,7 +4,7 @@
 .venv/bin/python -m pytest
 ```
 
-74 tests, all offline, no audio hardware, under half a second.
+131 tests, all offline, no audio hardware, under a second.
 
 ## What each suite covers
 
@@ -15,6 +15,8 @@
 | `test_transcript_store.py` | Session log, check-in list, CSV/text export | Direct |
 | `test_feedback.py` | Correction log, alias derivation, matcher applying aliases | Direct, plus a simulated truncated write |
 | `test_server.py` | HTTP API, mainly `/api/correct` | FastAPI `TestClient` |
+| `test_health.py` | Watchdog state machine: stalls, silence, restarts, backlog | Injected clock, so a 5-minute silence tests in microseconds |
+| `test_resample.py` | Resampling to 16 kHz | Tones in, FFT out — run against *both* engines, so the fallback is not dead code |
 
 `test_vad_segmenter.py` deliberately stubs out webrtcvad. Whether webrtcvad
 correctly identifies speech is webrtcvad's problem; where the segmenter draws

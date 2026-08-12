@@ -1,6 +1,7 @@
 # Ham Radio Net Speech-to-Text
 
-Live transcription for an amateur radio net. Audio comes in from an SDR, each
+Live transcription for an amateur radio net. Audio comes in from an SDR, a
+radio's line output, or a microphone; each
 transmission is transcribed, the speaker is matched against a roster of known
 callsigns, and everything lands in a browser dashboard that net control can
 read from across the table.
@@ -9,7 +10,7 @@ Fully offline — no cloud services, nothing leaves the machine. Whisper runs
 locally.
 
 ```
-SDR++ / GQRX ──▶ loopback sink ──▶ capture ──▶ VAD ──▶ Whisper ──▶ roster match ──▶ dashboard
+SDR / radio ──▶ loopback, line in, or mic ──▶ capture ──▶ VAD ──▶ Whisper ──▶ roster match ──▶ dashboard
 ```
 
 ![The dashboard during a net: matched stations in green with operator names, an
@@ -87,12 +88,44 @@ No recording handy? Generate one — this needs no radio at all:
 python tools/make_test_audio.py && python app.py --file test-net.wav --model tiny
 ```
 
-The WAV must be 16-bit PCM at 16 kHz (or a multiple: 48 kHz works). The
+The WAV must be 16-bit PCM; any sample rate works (44.1 kHz from a phone
+recording is resampled automatically). The
 dashboard populates as if the audio were live. If transmissions are being split
 in half, raise `vad.silence_ms`; if two stations are being merged into one clip,
 lower it.
 
-## Feeding audio in from an SDR
+## Choosing an audio input
+
+Any input works — the app does not care where the audio comes from:
+
+| Source | What it is | Trade-off |
+| --- | --- | --- |
+| **SDR loopback** | A monitor source fed by SDR++/GQRX | Best quality; audio never leaves the machine. Most setup. |
+| **Line in** | USB sound card or line input, fed from a radio's speaker or headphone jack | The practical choice for a handheld or mobile rig. Needs a cable and a level check. |
+| **Microphone** | Pointed at the radio's speaker | Fastest to set up, and works. The room is in the recording too, so expect more junk lines. |
+
+```bash
+python app.py --list-devices
+```
+
+That labels which devices look like a loopback, a line in, or a mic. Put the
+name (a substring is enough) or the index in `audio.device`.
+
+Two settings matter for line in and mic, and not at all for a loopback:
+
+- **`audio.channel`** — `mix`, `left`, `right`, or an index. If a stereo input
+  carries the radio on one side only, mixing in the dead channel halves your
+  level.
+- **`audio.gain`** — a line output into a mic input is usually far too quiet
+  (try 4–10); a speaker output into a line input is usually hot (try 0.3–0.5).
+  The dashboard warns when the level is too low to work with, so set this by
+  watching rather than guessing.
+
+Sample rate is handled for you. Mics and USB sound cards typically run at
+44.1 kHz, which is resampled to the 16 kHz Whisper wants (via `soxr`, with a
+built-in fallback if it is not installed).
+
+### Feeding audio in from an SDR
 
 Create a null sink and point SDR++/GQRX's output at it, then have this app read
 the sink's monitor source:
@@ -212,6 +245,42 @@ holding verbatim Whisper output. When your net turns up a new mis-transcription:
 2. Add the missing spelling to `PHONETIC_MAP` / `AMBIGUOUS_DIGIT_MAP`.
 3. Run `pytest` and confirm nothing else broke.
 
+## Watchdog, logging, and alerting
+
+The failure worth guarding against is not a crash — it is the pipeline that
+keeps running while logging nothing, because the SDR app was closed, the
+squelch stayed shut, or the sink got repointed. Forty minutes of the net go
+missing and the dashboard looks fine the whole time.
+
+So the app watches three things: whether audio frames are arriving, whether
+there is any *signal* in them, and whether the machine is keeping up.
+
+**On the dashboard** — a red or amber banner naming the problem, the status dot
+changes colour, and it beeps once on the transition (toggle with the
+**Alerts** button; the setting sticks). The beep matters because the operator
+is usually looking at the radio, not the screen.
+
+**In the log** — console plus a rotating file in `logs/`, with a heartbeat line
+every minute so you can see the net progressing:
+
+```
+Heartbeat: ok | up 12m | 24000 frames, 18 clips, 18 transcripts | level 412 RMS | last transcribe 0.4s | 0 dropped
+```
+
+**For anything external** — `GET /api/health` returns the same data as JSON, and
+**503** when the pipeline is in error, so a container healthcheck or a one-line
+`curl -f` in cron can act on it.
+
+**Recovery** — if the audio device drops (a USB SDR replugged mid-net), capture
+reopens automatically with exponential backoff, so it costs seconds rather
+than the rest of the net. For an unattended install, `deploy/net-stt.service`
+adds systemd `Restart=always` on top, and the container image has a
+`HEALTHCHECK` wired to the same endpoint.
+
+Thresholds live under `health:` in the config — most usefully
+`silence_after_s` (default 5 minutes), which is how long the audio can be dead
+quiet before it is worth telling you about.
+
 ## Dashboard
 
 - Matched stations in bold green; unmatched lines flagged amber with the
@@ -230,7 +299,7 @@ The page reconnects on its own if the app restarts.
 .venv/bin/python -m pytest
 ```
 
-74 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+131 tests, all offline, no audio hardware needed. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 

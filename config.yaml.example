@@ -2,13 +2,26 @@
 # NETSTT_<SECTION>_<KEY>, e.g. NETSTT_WHISPER_MODEL_SIZE=small.
 
 audio:
-  # Substring of the input device name. Run `python app.py --list-devices` to
-  # see what the host offers. This should be the monitor source that SDR++ or
-  # GQRX feeds -- typically a null sink's `.monitor`.
+  # Name substring or index of the input. Run `python app.py --list-devices`;
+  # it labels which entries look like an SDR loopback, a line in, or a mic.
+  #
+  #   SDR loopback   e.g. net_sink.monitor -- best quality, nothing leaves the box
+  #   Line in        e.g. "USB Audio CODEC" -- a radio's speaker/headphone out
+  #   Microphone     e.g. "Built-in" -- pointed at a speaker; the room is in it too
+  #
+  # Any sample rate works; it is resampled to 16 kHz automatically.
   # Leave null to use the system default input.
   device: null
   # VAD frame size in ms: 10, 20, or 30.
   frame_ms: 30
+  # mix, left, right, or a 0-based index. Use a single channel when a stereo
+  # line-in carries the radio on one side only -- mixing in a dead channel
+  # halves your level.
+  channel: mix
+  # Linear gain applied at capture. A line output into a mic input is usually
+  # too quiet (try 4-10); a speaker output into a line input is usually hot
+  # (try 0.3-0.5). Check the level in the dashboard banner rather than guessing.
+  gain: 1.0
 
 vad:
   # webrtcvad 0-3. 3 is the most aggressive at rejecting non-speech, which
@@ -68,6 +81,35 @@ roster:
 server:
   host: 0.0.0.0
   port: 8080
+
+# Watchdog. The failure worth catching is the quiet one: the pipeline still
+# running while logging nothing, because the SDR app closed or the squelch
+# stayed shut. Problems show as a banner on the dashboard, a beep, a log line,
+# and a 503 from GET /api/health.
+health:
+  # No audio frames at all for this long is an error.
+  stall_after_s: 5.0
+  # Frames arriving but silent for this long is a warning. Long enough not to
+  # fire during ordinary quiet stretches of a net.
+  silence_after_s: 300.0
+  # Below this level (int16 RMS) a frame counts as dead air, not quiet speech.
+  silence_rms: 15.0
+  check_interval_s: 1.0
+  # Stats line in the log, so you can see the net progressing. 0 disables.
+  heartbeat_s: 60.0
+  # Reopen the audio device automatically if it drops -- a USB SDR replugged
+  # mid-net should cost seconds, not the rest of the net.
+  restart_capture: true
+  restart_delay_s: 2.0
+  restart_max_delay_s: 30.0
+
+logging:
+  # Rotating file log, kept alongside the console. Set null for console only.
+  dir: logs
+  level: INFO        # console
+  file_level: DEBUG  # file keeps more, for the morning after
+  max_bytes: 5000000
+  backups: 5
 
 # Where session logs are written on exit and by the Export button.
 export_dir: .

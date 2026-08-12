@@ -193,6 +193,82 @@ function applyCorrection(updated) {
   renderRoster();
 }
 
+/* Health banner ------------------------------------------------------------
+   The pipeline can be up and producing nothing — SDR app closed, squelch shut,
+   sink repointed. The banner says so, and beeps, because the operator is
+   usually looking at the radio rather than the screen. */
+
+const banner = document.getElementById("banner");
+const alertBtn = document.getElementById("alertBtn");
+let alertsOn = localStorage.getItem("netstt.alerts") !== "off";
+let lastHealthState = "ok";
+
+alertBtn.classList.toggle("active", alertsOn);
+alertBtn.textContent = `Alerts: ${alertsOn ? "on" : "off"}`;
+alertBtn.onclick = () => {
+  alertsOn = !alertsOn;
+  localStorage.setItem("netstt.alerts", alertsOn ? "on" : "off");
+  alertBtn.classList.toggle("active", alertsOn);
+  alertBtn.textContent = `Alerts: ${alertsOn ? "on" : "off"}`;
+  if (alertsOn) beep(660, 0.08); // confirm the browser will actually make noise
+};
+
+function renderHealth(health) {
+  if (!health) return;
+  const state = health.state || "ok";
+
+  dot.classList.remove("warning", "error");
+  if (state !== "ok") dot.classList.add(state);
+
+  if (state === "ok" || !health.issues || health.issues.length === 0) {
+    banner.hidden = true;
+    banner.className = "";
+  } else {
+    banner.hidden = false;
+    banner.className = state;
+    const label = state === "error" ? "Not logging" : "Check audio";
+    banner.innerHTML =
+      `<span class="label">${label}</span>` +
+      `<ul>${health.issues.map((i) => `<li>${escapeHTML(i)}</li>`).join("")}</ul>`;
+  }
+
+  // Beep only on the transition into a worse state, not every poll.
+  const rank = { ok: 0, warning: 1, error: 2 };
+  if (alertsOn && rank[state] > rank[lastHealthState]) {
+    beep(state === "error" ? 300 : 520, 0.25);
+    if (state === "error") setTimeout(() => beep(300, 0.25), 350);
+  }
+  lastHealthState = state;
+}
+
+function escapeHTML(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+/* A short tone via Web Audio, so there is no asset to ship or path to get
+   wrong on a machine that has never been online. */
+let audioCtx = null;
+function beep(frequency, seconds) {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = frequency;
+    osc.type = "sine";
+    gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.25, audioCtx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + seconds);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + seconds);
+  } catch (err) {
+    /* Autoplay policy blocks audio until the page is clicked; the banner is
+       still the primary signal, so this is not worth surfacing. */
+  }
+}
+
 let toastTimer = null;
 function showToast(message) {
   toast.textContent = message;
@@ -253,14 +329,21 @@ function connect() {
       addEntry(msg.entry, true);
     } else if (msg.type === "correction") {
       applyCorrection(msg.entry);
-    } else if (msg.type === "history" && entries.length === 0) {
-      for (const entry of msg.entries) addEntry(entry, false);
+    } else if (msg.type === "health") {
+      renderHealth(msg.health);
+    } else if (msg.type === "history") {
+      if (entries.length === 0) for (const entry of msg.entries) addEntry(entry, false);
+      renderHealth(msg.health);
     }
   };
   ws.onclose = () => {
     clearInterval(ws.pingTimer);
     dot.classList.remove("live");
     conn.textContent = "reconnecting…";
+    renderHealth({
+      state: "error",
+      issues: ["Lost the connection to the app — this log is not updating"],
+    });
     setTimeout(connect, 2000);
   };
   ws.onerror = () => ws.close();

@@ -1,0 +1,261 @@
+# netcontroller -- live speech-to-text and callsign matching for ham radio nets
+# Copyright (C) 2026 Michelle Michaels
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program. If not, see <https://www.gnu.org/licenses/>.
+
+"""Health tracking for the capture pipeline.
+
+The failure this exists to catch is the quiet one. A crash is obvious -- the
+process is gone. What actually bites at a net control table is the pipeline
+that stays up while producing nothing: the SDR app was closed, the loopback
+sink got repointed, the squelch stayed shut, the machine fell behind. The
+dashboard looks fine, and forty minutes of the net go unlogged.
+
+So the monitor watches for *silence where there should be sound*, at three
+levels:
+
+    frames arriving   -> is the audio device still delivering?
+    signal in frames  -> is anything actually on the channel?
+    clips completing  -> is the VAD/STT chain still producing?
+
+The capture thread reports events; the asyncio loop reads snapshots. Times come
+from an injectable clock so the state machine can be tested without sleeping.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Callable
+
+OK = "ok"
+WARNING = "warning"
+ERROR = "error"
+
+_SEVERITY = {OK: 0, WARNING: 1, ERROR: 2}
+
+
+def _first_line(message: str) -> str:
+    """First line of an exception message, tidied for a one-line banner.
+
+    Capture errors carry multi-line remediation hints for the log; the banner
+    gets the headline, without the colon left dangling where the list was.
+    """
+    if not message:
+        return ""
+    return message.splitlines()[0].strip().rstrip(":").strip()
+
+
+@dataclass(frozen=True)
+class Health:
+    """A point-in-time view of the pipeline, safe to serialise to the dashboard."""
+
+    state: str
+    issues: list[str]
+    """Operator-facing descriptions, worst first. Empty when state is ok."""
+    capturing: bool
+    uptime_s: float
+    frames: int
+    clips: int
+    transcriptions: int
+    errors: int
+    overflows: int
+    signal_rms: float
+    """Recent audio level in int16 units. 0 means the device is delivering silence."""
+    seconds_since_frame: float | None
+    seconds_since_clip: float | None
+    last_transcribe_s: float
+    """How long the last transcription took; a proxy for keeping up."""
+    last_error: str
+
+    def to_dict(self) -> dict:
+        return {
+            "state": self.state,
+            "issues": self.issues,
+            "capturing": self.capturing,
+            "uptime_s": round(self.uptime_s, 1),
+            "frames": self.frames,
+            "clips": self.clips,
+            "transcriptions": self.transcriptions,
+            "errors": self.errors,
+            "overflows": self.overflows,
+            "signal_rms": round(self.signal_rms, 1),
+            "seconds_since_frame": (
+                None
+                if self.seconds_since_frame is None
+                else round(self.seconds_since_frame, 1)
+            ),
+            "seconds_since_clip": (
+                None
+                if self.seconds_since_clip is None
+                else round(self.seconds_since_clip, 1)
+            ),
+            "last_transcribe_s": round(self.last_transcribe_s, 2),
+            "last_error": self.last_error,
+        }
+
+
+@dataclass
+class HealthMonitor:
+    """Thread-safe pipeline health.
+
+    stall_after_s: no audio frames for this long is an error -- the device
+        stopped delivering, which on PulseAudio usually means the sink went
+        away underneath us.
+    silence_after_s: frames arriving but no signal in them for this long is a
+        warning. Long enough not to fire during ordinary quiet stretches of a
+        net; short enough to catch a closed squelch before the net ends.
+    silence_rms: below this, a frame counts as dead air rather than quiet
+        speech. Receiver hiss normally sits well above it.
+    """
+
+    stall_after_s: float = 5.0
+    silence_after_s: float = 300.0
+    silence_rms: float = 15.0
+    clock: Callable[[], float] = time.monotonic
+
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def __post_init__(self) -> None:
+        now = self.clock()
+        self._started = now
+        self._capturing = False
+        self._last_frame: float | None = None
+        self._last_clip: float | None = None
+        self._last_signal: float | None = None
+        self._frames = 0
+        self._clips = 0
+        self._transcriptions = 0
+        self._errors = 0
+        self._overflows = 0
+        self._signal_rms = 0.0
+        self._last_transcribe_s = 0.0
+        self._last_error = ""
+
+    # -- reported by the capture thread ------------------------------------
+
+    def capture_started(self) -> None:
+        with self._lock:
+            self._capturing = True
+            self._last_error = ""
+            # Give the device a fresh grace period; otherwise a restart looks
+            # stalled for as long as it takes the first frame to arrive.
+            self._last_frame = self.clock()
+            self._last_signal = self._last_frame
+
+    def capture_stopped(self) -> None:
+        with self._lock:
+            self._capturing = False
+
+    def capture_failed(self, message: str) -> None:
+        with self._lock:
+            self._capturing = False
+            self._errors += 1
+            self._last_error = _first_line(message) or "capture failed"
+
+    def note_frame(self, rms: float) -> None:
+        now = self.clock()
+        with self._lock:
+            self._frames += 1
+            self._last_frame = now
+            self._signal_rms = rms
+            if rms >= self.silence_rms:
+                self._last_signal = now
+
+    def note_clip(self) -> None:
+        with self._lock:
+            self._clips += 1
+            self._last_clip = self.clock()
+
+    def note_transcription(self, seconds: float) -> None:
+        with self._lock:
+            self._transcriptions += 1
+            self._last_transcribe_s = seconds
+
+    def note_overflows(self, total: int) -> None:
+        with self._lock:
+            self._overflows = total
+
+    def note_error(self, message: str) -> None:
+        with self._lock:
+            self._errors += 1
+            self._last_error = _first_line(message) or "error"
+
+    # -- read by the event loop --------------------------------------------
+
+    def snapshot(self) -> Health:
+        now = self.clock()
+        with self._lock:
+            since_frame = None if self._last_frame is None else now - self._last_frame
+            since_clip = None if self._last_clip is None else now - self._last_clip
+            since_signal = (
+                None if self._last_signal is None else now - self._last_signal
+            )
+            issues: list[tuple[str, str]] = []
+
+            if not self._capturing:
+                issues.append(
+                    (
+                        ERROR,
+                        f"Audio capture is not running: {self._last_error}"
+                        if self._last_error
+                        else "Audio capture is not running",
+                    )
+                )
+            elif since_frame is not None and since_frame > self.stall_after_s:
+                issues.append(
+                    (
+                        ERROR,
+                        f"No audio from the device for {since_frame:.0f}s "
+                        "-- check SDR++/GQRX and the loopback sink",
+                    )
+                )
+            elif since_signal is not None and since_signal > self.silence_after_s:
+                issues.append(
+                    (
+                        WARNING,
+                        f"Audio is silent ({self._signal_rms:.0f} RMS) for "
+                        f"{since_signal / 60:.0f} min -- check squelch and "
+                        "the SDR app's output level",
+                    )
+                )
+
+            if self._overflows:
+                issues.append(
+                    (
+                        WARNING,
+                        f"Dropped {self._overflows} audio block(s) -- the "
+                        "machine is behind; try a smaller Whisper model",
+                    )
+                )
+
+            issues.sort(key=lambda pair: -_SEVERITY[pair[0]])
+            state = issues[0][0] if issues else OK
+
+            return Health(
+                state=state,
+                issues=[message for _, message in issues],
+                capturing=self._capturing,
+                uptime_s=now - self._started,
+                frames=self._frames,
+                clips=self._clips,
+                transcriptions=self._transcriptions,
+                errors=self._errors,
+                overflows=self._overflows,
+                signal_rms=self._signal_rms,
+                seconds_since_frame=since_frame,
+                seconds_since_clip=since_clip,
+                last_transcribe_s=self._last_transcribe_s,
+                last_error=self._last_error,
+            )

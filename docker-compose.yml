@@ -34,4 +34,6 @@ services:
       # Optional: drop a config.yaml next to this file to override defaults.
       # - ./config.yaml:/app/config.yaml:ro
       - ./logs:/app/logs
+      # Corrections and the aliases learned from them; keep these across runs.
+      - ./feedback.jsonl:/app/feedback.jsonl
     restart: unless-stopped

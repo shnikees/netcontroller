@@ -34,8 +34,17 @@ ENV_PREFIX = "NETSTT"
 @dataclass
 class AudioConfig:
     device: str | None = None
-    """Substring of the input device name; null uses the system default."""
+    """Name substring or index of the input; null uses the system default.
+
+    Works with any input: an SDR loopback monitor source, a USB sound card or
+    line-in fed from a radio's speaker output, or a microphone.
+    """
     frame_ms: int = 30
+    channel: str = "mix"
+    """mix, left, right, or a 0-based index. Use one channel when a stereo
+    line-in carries the radio on a single side."""
+    gain: float = 1.0
+    """Linear multiplier applied at capture, for inputs that are too quiet."""
 
 
 @dataclass
@@ -88,12 +97,42 @@ class ServerConfig:
 
 
 @dataclass
+class HealthConfig:
+    stall_after_s: float = 5.0
+    """No audio frames for this long is an error."""
+    silence_after_s: float = 300.0
+    """Frames arriving but no signal in them for this long is a warning."""
+    silence_rms: float = 15.0
+    """Below this level (int16 units) a frame counts as dead air."""
+    check_interval_s: float = 1.0
+    heartbeat_s: float = 60.0
+    """How often to log a stats line, so the log shows the net progressing."""
+    restart_capture: bool = True
+    """Reopen the audio device automatically when capture dies."""
+    restart_delay_s: float = 2.0
+    restart_max_delay_s: float = 30.0
+    """Backoff ceiling; a device that is gone should not be retried in a spin."""
+
+
+@dataclass
+class LoggingConfig:
+    dir: str | None = "logs"
+    """Set null to disable file logging and use the console only."""
+    level: str = "INFO"
+    file_level: str = "DEBUG"
+    max_bytes: int = 5_000_000
+    backups: int = 5
+
+
+@dataclass
 class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     vad: VadConfig = field(default_factory=VadConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     roster: RosterConfig = field(default_factory=RosterConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    health: HealthConfig = field(default_factory=HealthConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
     export_dir: str = "."
 
 
@@ -115,6 +154,8 @@ _SECTIONS = {
     "whisper": WhisperConfig,
     "roster": RosterConfig,
     "server": ServerConfig,
+    "health": HealthConfig,
+    "logging": LoggingConfig,
 }
 
 

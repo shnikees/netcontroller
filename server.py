@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from callsign_match import CallsignMatcher, RosterEntry
 from feedback import FeedbackLog, record_correction
+from health import HealthMonitor
 from transcript_store import TranscriptStore
 
 log = logging.getLogger(__name__)
@@ -74,6 +75,7 @@ def create_app(
     export_dir: str = ".",
     matcher: CallsignMatcher | None = None,
     feedback: FeedbackLog | None = None,
+    health: HealthMonitor | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Ham Net STT")
     by_callsign = {e.callsign: e for e in roster}
@@ -161,6 +163,21 @@ def create_app(
             {"entry": entry.to_dict(), "learned": learned, "alias": candidate}
         )
 
+    @app.get("/api/health")
+    async def health_check() -> JSONResponse:
+        """Pipeline health, for the dashboard banner and for external checks.
+
+        Returns 503 when the pipeline is in error, so a container healthcheck,
+        systemd, or a one-line cron `curl -f` can act on it without parsing the
+        body.
+        """
+        if health is None:
+            return JSONResponse({"state": "unknown", "issues": []})
+        snapshot = health.snapshot()
+        return JSONResponse(
+            snapshot.to_dict(), status_code=503 if snapshot.state == "error" else 200
+        )
+
     @app.get("/api/aliases")
     async def aliases() -> JSONResponse:
         """What the matcher has learned so far, for inspection during a net."""
@@ -181,7 +198,13 @@ def create_app(
     async def ws(websocket: WebSocket) -> None:
         await broadcaster.register(websocket)
         try:
-            await websocket.send_json({"type": "history", "entries": store.all()})
+            await websocket.send_json(
+                {
+                    "type": "history",
+                    "entries": store.all(),
+                    "health": health.snapshot().to_dict() if health else None,
+                }
+            )
             while True:
                 # The dashboard is read-only; this just keeps the socket open
                 # and gives us a clean disconnect signal.

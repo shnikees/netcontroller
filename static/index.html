@@ -114,6 +114,20 @@
     box-shadow: 0 6px 24px rgba(0,0,0,0.45);
   }
   .toast[hidden] { display: none; }
+  /* Health banner. Deliberately loud: the failure this catches is the pipeline
+     that looks fine while logging nothing. */
+  #banner {
+    display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
+    padding: 0.7rem 1.25rem; font-size: 0.95rem;
+    border-bottom: 1px solid var(--line);
+  }
+  #banner[hidden] { display: none; }
+  #banner.warning { background: #4a3a15; color: #ffe1a8; }
+  #banner.error { background: #5c1f1f; color: #ffd7d7; }
+  #banner .label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.75rem; }
+  #banner ul { margin: 0; padding-left: 1.1rem; }
+  .dot.warning { background: var(--unmatched); }
+  .dot.error { background: #ff6b6b; }
   .empty { color: var(--muted); padding: 2rem 0.5rem; }
   tr.new { animation: flash 1.2s ease-out; }
   @keyframes flash { from { background: rgba(111, 179, 255, 0.18); } to { background: transparent; } }
@@ -125,10 +139,12 @@
   <div class="status"><span class="dot" id="dot"></span><span id="conn">connecting…</span></div>
   <div class="status"><span id="stats">0 transmissions · 0 stations</span></div>
   <div class="spacer"></div>
+  <button id="alertBtn" class="active" title="Beep when the pipeline goes unhealthy">Alerts: on</button>
   <button id="scrollBtn" class="active">Auto-scroll: on</button>
   <button id="clearFilter" hidden>Clear filter</button>
   <button id="exportBtn">Export log</button>
 </header>
+<div id="banner" hidden></div>
 <div class="layout">
   <aside>
     <h2>Roster</h2>
