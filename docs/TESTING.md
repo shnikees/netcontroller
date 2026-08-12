@@ -4,7 +4,7 @@
 .venv/bin/python -m pytest
 ```
 
-162 tests, all offline, no audio hardware. About 20 seconds, most of it
+167 tests, all offline, no audio hardware. About 20 seconds, most of it
 the pipeline tests deliberately running a slow transcriber in real time.
 
 ## What each suite covers

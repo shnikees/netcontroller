@@ -67,6 +67,35 @@ class SourceConfig:
     file: str | None = None
     """Replay a recording instead of opening a device. For tuning a
     multi-receiver setup offline, the way --file does for a single one."""
+    priority: int = 0
+    """Higher goes first when the transcriber is behind. Put the repeater --
+    the frequency the net actually runs on -- above a staging channel, so a
+    backlog delays the side traffic rather than the main log."""
+
+    # VAD overrides; None inherits the global `vad:` block. Receivers differ:
+    # a strong repeater can take an aggressive setting that would deafen a weak
+    # simplex signal, which is the whole reason these are per-source.
+    aggressiveness: int | None = None
+    silence_ms: int | None = None
+    min_clip_ms: int | None = None
+    preroll_ms: int | None = None
+    trigger_ratio: float | None = None
+
+    def vad_settings(self, defaults: "VadConfig") -> dict:
+        """This source's VAD settings, falling back to the global block."""
+        return {
+            "aggressiveness": _or(self.aggressiveness, defaults.aggressiveness),
+            "silence_ms": _or(self.silence_ms, defaults.silence_ms),
+            "min_clip_ms": _or(self.min_clip_ms, defaults.min_clip_ms),
+            "max_clip_ms": defaults.max_clip_ms,
+            "preroll_ms": _or(self.preroll_ms, defaults.preroll_ms),
+            "trigger_ratio": _or(self.trigger_ratio, defaults.trigger_ratio),
+        }
+
+
+def _or(value, fallback):
+    """Fall back when a per-source override is not set."""
+    return fallback if value is None else value
 
 
 @dataclass

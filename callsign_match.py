@@ -147,6 +147,9 @@ FILLER_WORDS: frozenset[str] = frozenset(
     }
 )
 
+BREAK = "\x00"
+"""Marks where a word was dropped, so gluing does not run across the gap."""
+
 # US amateur callsign structure: 1-2 letter prefix, one digit, 1-3 letter suffix.
 CALLSIGN_RE = re.compile(r"\b([A-Z]{1,2}[0-9][A-Z]{1,3})\b")
 
@@ -276,9 +279,15 @@ def normalize(text: str) -> str:
         elif token in AMBIGUOUS_DIGIT_MAP:
             if _is_digit_position(expanded, i):
                 out.append(AMBIGUOUS_DIGIT_MAP[token])
-            # Otherwise it is ordinary English; drop it like other filler.
+            else:
+                out.append(BREAK)
         elif token in FILLER_WORDS:
-            continue
+            # A dropped word still separates what was on either side of it.
+            # Without this, "W6ABC no traffic K7XYZ" leaves the two callsigns
+            # adjacent and they weld into one nonsense token -- losing both
+            # stations, which is exactly what happens on a fast net where two
+            # people key up inside one VAD gap.
+            out.append(BREAK)
         elif re.fullmatch(r"[0-9]+", token):
             out.append(token)
         else:
@@ -309,11 +318,19 @@ def _is_spelling_token(token: str) -> bool:
 
 
 def _glue_singles(tokens: list[str]) -> str:
-    """Join runs of 1-char tokens into words: [W,6,A,B,C] -> "W6ABC"."""
+    """Join runs of 1-char tokens into words: [W,6,A,B,C] -> "W6ABC".
+
+    BREAK markers end a run without contributing anything themselves, so words
+    that were dropped still keep their neighbours apart.
+    """
     result: list[str] = []
     run: list[str] = []
     for token in tokens:
-        if len(token) == 1:
+        if token == BREAK:
+            if run:
+                result.append("".join(run))
+                run = []
+        elif len(token) == 1:
             run.append(token)
         else:
             if run:

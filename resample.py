@@ -31,9 +31,10 @@ Three paths, picked automatically:
 All three are streaming-safe: filter state carries across calls, so block
 boundaries do not click and the VAD does not hear the click as speech.
 
-Anti-aliasing matters here rather than being a nicety. Fold 44.1 kHz hiss down
-onto the voice band and Whisper's accuracy drops on exactly the weak signals
-where the roster matcher is already working hardest.
+Anti-aliasing matters here rather than being a nicety. Fold 44.1 kHz content
+down onto the voice band and it sits on top of the speech, which costs
+transcription accuracy on exactly the fast, run-together delivery that is
+already the hardest thing to get right.
 """
 
 from __future__ import annotations

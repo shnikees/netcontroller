@@ -134,10 +134,22 @@ simplex staging channel. List them under `sources:` and both land in one log:
 sources:
   - name: Repeater
     device: repeater_sink.monitor
+    priority: 10          # served first when the transcriber is behind
   - name: Simplex
     device: simplex_sink.monitor
     channel: left
+    gain: 4.0             # weaker signal, brought up
+    aggressiveness: 1     # gentler VAD than the repeater needs
+    silence_ms: 1200
 ```
+
+**Receivers are not interchangeable, so weight them.** The repeater carries the
+net and arrives strong; a staging channel may be weak and slow. Anything under
+`vad:` can be overridden per source (`aggressiveness`, `silence_ms`,
+`min_clip_ms`, `preroll_ms`, `trigger_ratio`), and `gain` compensates for level
+differences at the input. `priority` decides who goes first when there is a
+backlog — put the frequency the net actually runs on above the side traffic, so
+a slow moment delays the staging channel rather than the main log.
 
 Every line is tagged with the receiver that heard it, and the sidebar grows a
 per-source health panel — click a source to filter the log to it, which
@@ -191,12 +203,27 @@ The settings that actually matter in the field:
 Rough figures for one ~5 second transmission on CPU. Measure on your own
 hardware; this is a guide, not a benchmark.
 
-| Model | Laptop CPU | Pi 4 | Pi 5 | Accuracy on phonetics |
+| Model | Laptop CPU | Pi 4 | Pi 5 | Accuracy |
 | --- | --- | --- | --- | --- |
-| `tiny` | ~0.2 s | ~2 s | ~1 s | Rough; workable with a roster to correct against |
-| `base` | ~0.4 s | ~4 s | ~2 s | Good default |
-| `small` | ~1.5 s | too slow | ~6 s | Noticeably better on weak signals |
-| `medium` | ~4 s | no | no | Only if you have a GPU |
+| `tiny` | ~0.2 s | ~2 s | ~1 s | Rough. Drops words when an operator rattles a callsign off quickly; leans hard on the roster to recover |
+| `base` | ~0.4 s | ~4 s | ~2 s | Good default for an unhurried net |
+| `small` | ~1.5 s | too slow | ~6 s | Where to go if transcripts are wrong on fast, run-together speech |
+| `medium` | ~4 s | no | no | Best accuracy; needs a GPU to be worth it |
+
+**If the problem is fast-paced traffic, model size is the main lever.** A
+station who gives their callsign as one run-on phrase is harder for a small
+model than a quiet one who spells it out, and no amount of VAD tuning fixes a
+word the model never heard. `small` is the first thing to try; `beam_size: 5`
+(the default) is already doing what it can.
+
+Two settings interact with fast nets and are worth knowing about:
+
+- **`vad.silence_ms`** (default 800). On a net where stations key up on top of
+  each other, an 800 ms gap may never appear, and two stations end up in one
+  clip — where only the first callsign gets logged. Lower it to 400–500 for a
+  fast net, and check the log for lines containing two check-ins.
+- **`whisper.vocabulary`** — adding the phrases your net actually uses biases
+  decoding, which helps most exactly when speech is quick and clipped.
 
 CUDA is detected automatically (`whisper.device: auto`); set it to `cpu` or
 `cuda` to force one.
@@ -334,7 +361,7 @@ The page reconnects on its own if the app restarts.
 .venv/bin/python -m pytest
 ```
 
-162 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+167 tests, all offline, no audio hardware needed. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 

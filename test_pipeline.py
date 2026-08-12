@@ -309,3 +309,69 @@ def test_single_source_entries_are_not_tagged(tmp_path, loop) -> None:
     run_to_completion(pipeline, store, expected=2)
 
     assert all(entry.source == "" for entry in store.entries)
+
+
+def test_priority_source_is_transcribed_first(tmp_path, loop) -> None:
+    """When the transcriber is behind, the repeater must not queue behind a
+    staging channel -- the main log is the one people are waiting on."""
+    repeater = tmp_path / "repeater.wav"
+    simplex = tmp_path / "simplex.wav"
+    write_net_wav(repeater, transmissions=3)
+    write_net_wav(simplex, transmissions=3)
+
+    order: list[str] = []
+
+    class RecordingStub(SlowStub):
+        def transcribe(self, audio):
+            result = super().transcribe(audio)
+            return result
+
+    stub = RecordingStub(delay=0.3)
+    pipeline, store = build(
+        tmp_path,
+        loop,
+        stub,
+        clip_queue_max=8,
+        spill_enabled=False,
+        sources=[
+            SourceConfig(name="Simplex", file=str(simplex), priority=0),
+            SourceConfig(name="Repeater", file=str(repeater), priority=10),
+        ],
+    )
+    run_to_completion(pipeline, store, expected=6)
+
+    order = [e.source for e in sorted(store.entries, key=lambda e: e.id)]
+    # Both sources start together and the queue backs up, so once there is a
+    # real backlog the higher-priority source should be served first.
+    assert "Repeater" in order and "Simplex" in order
+    first_repeater = order.index("Repeater")
+    last_simplex = len(order) - 1 - order[::-1].index("Simplex")
+    assert first_repeater < last_simplex, f"priority ignored: {order}"
+
+
+def test_per_source_vad_settings_are_applied(tmp_path, loop) -> None:
+    # A weak simplex signal needs a gentler VAD than a strong repeater; sharing
+    # one global setting is what made per-source overrides necessary.
+    pipeline, _ = build(
+        tmp_path,
+        loop,
+        SlowStub(),
+        sources=[
+            SourceConfig(name="Repeater", aggressiveness=3, silence_ms=600),
+            SourceConfig(name="Simplex", aggressiveness=1, silence_ms=1200),
+        ],
+    )
+    by_name = {s.name: s for s in pipeline.sources}
+    assert by_name["Repeater"].segmenter.aggressiveness == 3
+    assert by_name["Repeater"].segmenter.silence_ms == 600
+    assert by_name["Simplex"].segmenter.aggressiveness == 1
+    assert by_name["Simplex"].segmenter.silence_ms == 1200
+
+
+def test_sources_without_overrides_inherit_the_global_vad(tmp_path, loop) -> None:
+    pipeline, _ = build(
+        tmp_path, loop, SlowStub(), sources=[SourceConfig(name="Repeater")]
+    )
+    segmenter = pipeline.sources[0].segmenter
+    assert segmenter.aggressiveness == pipeline.config.vad.aggressiveness
+    assert segmenter.silence_ms == pipeline.config.vad.silence_ms

@@ -98,13 +98,7 @@ class SourceCapture:
         self._thread: threading.Thread | None = None
         self._capture: AudioCapture | None = None
         self.segmenter = VadSegmenter(
-            frame_ms=config.audio.frame_ms,
-            aggressiveness=config.vad.aggressiveness,
-            silence_ms=config.vad.silence_ms,
-            min_clip_ms=config.vad.min_clip_ms,
-            max_clip_ms=config.vad.max_clip_ms,
-            preroll_ms=config.vad.preroll_ms,
-            trigger_ratio=config.vad.trigger_ratio,
+            frame_ms=config.audio.frame_ms, **source.vad_settings(config.vad)
         )
 
     @property
@@ -146,6 +140,7 @@ class SourceCapture:
                     if self._stop.is_set():
                         break
                     clip.source = self.name
+                    clip.priority = self.source.priority
                     self.submit(clip)
                 if self.wav_path or self._stop.is_set():
                     self.health.capture_finished()
@@ -308,7 +303,12 @@ class Pipeline:
 
         # Bounded on purpose. Past this depth the backlog goes to disk, where it
         # is not competing for memory on a 2 GB Pi.
-        self._clips: queue.Queue = queue.Queue(maxsize=config.buffering.clip_queue_max)
+        # Priority queue: when the transcriber is behind, the repeater's traffic
+        # should reach the log before a staging channel's. Ties break on
+        # sequence, so within one priority it stays first-in-first-out.
+        self._clips: queue.PriorityQueue = queue.PriorityQueue(
+            maxsize=config.buffering.clip_queue_max
+        )
         self.spill = SpillStore(
             config.buffering.spill_dir, max_clips=config.buffering.spill_max_clips
         )
@@ -388,7 +388,7 @@ class Pipeline:
             clip.sequence = self._sequence
 
         try:
-            self._clips.put_nowait(clip)
+            self._clips.put_nowait((-clip.priority, clip.sequence, clip))
             return
         except queue.Full:
             pass
@@ -430,13 +430,13 @@ class Pipeline:
         """
         while not self._stop.is_set():
             try:
-                clip = self._clips.get(timeout=0.5)
+                item = self._clips.get(timeout=0.5)
             except queue.Empty:
                 self._drain_one_spilled()
                 continue
-            if clip is None:
+            if item is None:
                 return
-            self._handle_clip(clip, late=False)
+            self._handle_clip(item[2], late=False)
 
     def _drain_one_spilled(self) -> None:
         if not self.config.buffering.spill_enabled:

@@ -250,6 +250,26 @@ def test_mangled_quebec_still_yields_a_full_candidate(
     assert result.candidate == "VE3ZQR"
 
 
+def test_two_stations_in_one_clip_do_not_weld_together(
+    matcher: CallsignMatcher,
+) -> None:
+    """On a fast net, two stations key up inside one VAD gap and land in one
+    clip. The dropped filler between them used to leave the callsigns adjacent,
+    where they glued into one nonsense token and *both* stations were lost."""
+    raw = "whiskey six alpha bravo charlie no traffic kilo seven xray yankee zulu"
+    assert normalize(raw) == "W6ABC K7XYZ"
+    assert extract_candidates(normalize(raw)) == ["W6ABC", "K7XYZ"]
+
+    result = matcher.match(raw)
+    assert result.matched
+    assert result.callsign == "W6ABC"
+
+
+def test_filler_between_spelled_letters_still_separates() -> None:
+    # "alpha bravo over charlie delta" is two fragments, not one four-letter run.
+    assert normalize("alpha bravo over charlie delta") == "AB CD"
+
+
 # --------------------------------------------------------------------------
 # Roster loading + hotwords
 # --------------------------------------------------------------------------

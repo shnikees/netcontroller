@@ -4,35 +4,70 @@ Written for the version of you that comes back to this in six months.
 
 ## Data flow
 
+Everything above the clip queue runs **once per receiver**; everything below it
+is shared.
+
 ```
-SDR++ / GQRX  (separate app, on the host)
-     │  audio out → PulseAudio/PipeWire loopback sink
-     ▼
-audio_capture.py    reads the sink's monitor source, 16 kHz mono int16 frames
-     │  30 ms frames over a bounded queue
-     ▼
-vad_segmenter.py    webrtcvad state machine → one Clip per transmission
-     │  Clip(float32 audio, start_offset_ms, duration_ms)
-     ▼
-stt_worker.py       faster-whisper → text + confidence
-     │  Transcription(text, confidence, ...)
-     ▼
-callsign_match.py   learned aliases → normalize → extract → fuzzy match roster
-     │  MatchResult(matched, callsign, score, candidate, reason, via_alias)
-     ▼
-transcript_store.py in-memory session log + CSV/text export
-     │                        ▲
-     │                        │ operator corrections (POST /api/correct)
-     │                  feedback.py -- append-only log, replayed into aliases
-     │
-     ▼
-server.py           FastAPI: GET /api/history, POST /api/export, WS /ws
-     │
-     ▼
-static/             plain-JS dashboard, no build step
+  ┌─ Receiver: "Repeater" ────────┐   ┌─ Receiver: "Simplex" ─────────┐
+  │ SDR loopback / line in / mic  │   │ …one of these per source      │
+  │            │                  │   │                               │
+  │   audio_capture.py            │   │                               │
+  │   + resample.py   any rate → 16 kHz, pick/mix channel, apply gain  │
+  │            │                  │   │                               │
+  │   ring_buffer.py  pre-allocated; the callback never allocates      │
+  │            │  30 ms int16 frames                                   │
+  │   vad_segmenter.py  webrtcvad → one Clip per transmission          │
+  └────────────┼──────────────────┘   └───────────────┬───────────────┘
+               │  Clip(audio, start_offset_ms, duration_ms, source, sequence)
+               └───────────────┬───────────────────────┘
+                               ▼
+                    clip queue  (shared, bounded)
+                               │                    ╲ full?
+                               │                     ╲
+                               │              clip_spill.py  WAVs on disk,
+                               │                     ╱       replayed in lulls
+                               ▼                    ╱
+                    stt_worker.py   faster-whisper → text + confidence
+                               │  Transcription(text, confidence, …)
+                               ▼
+                    callsign_match.py   aliases → normalize → extract → fuzzy match
+                               │  MatchResult(matched, callsign, score, …)
+                               ▼
+                    transcript_store.py   in-memory log, ordered by timestamp
+                               │      ▲
+                               │      │ corrections (POST /api/correct)
+                               │  feedback.py   append-only log → learned aliases
+                               ▼
+                    server.py   FastAPI + websocket
+                               │  /api/history · /api/correct · /api/health
+                               │  /api/aliases · /api/export · WS /ws
+                               ▼
+                    static/   plain-JS dashboard, no build step
 ```
 
-`app.py` wires it together and owns the process lifecycle.
+Alongside all of it, `health.py` watches each source and `app.py`'s watchdog
+turns that into the dashboard banner, the log, and the `/api/health` status
+code. `app.py` wires everything together and owns the process lifecycle.
+
+## File map
+
+| File | What it does |
+| --- | --- |
+| `app.py` | Entrypoint, `SourceCapture` and `Pipeline`, watchdog task |
+| `audio_capture.py` | Device selection, channel/gain, → 16 kHz frames |
+| `resample.py` | Any sample rate → 16 kHz (soxr, or a built-in fallback) |
+| `ring_buffer.py` | Pre-allocated audio buffer between callback and VAD |
+| `vad_segmenter.py` | One clip per transmission |
+| `clip_spill.py` | Disk overflow when the transcriber is behind |
+| `stt_worker.py` | faster-whisper wrapper |
+| `callsign_match.py` | Normalizer + roster matcher — the domain logic |
+| `feedback.py` | Operator corrections, and the aliases learned from them |
+| `transcript_store.py` | Session log, ordering, CSV/text export |
+| `health.py` | Per-source health, and the combined verdict |
+| `logging_setup.py` | Console + rotating file logging |
+| `config.py` | YAML + `NETSTT_*` env overrides |
+| `server.py` | HTTP + websocket |
+| `static/` | Dashboard |
 
 ## Threading model
 
@@ -84,6 +119,11 @@ Four stages, each separately testable:
 3. `CallsignMatcher._match_candidate()` — `rapidfuzz` against the roster.
 4. Accept/reject — threshold plus an ambiguity margin.
 
+Dropped filler leaves a `BREAK` marker rather than nothing, so gluing does not
+run across the gap. Without it, "W6ABC no traffic K7XYZ" — two stations landing
+in one clip, which is what a fast net produces — welded into `W6ABCK7XYZ` and
+*both* callsigns were lost.
+
 The threshold and margin encode a deliberate bias: **prefer "unmatched" over a
 wrong callsign.** Net control will notice a blank and resolve it by ear; they
 will not notice a plausible wrong callsign in a scrolling log.
@@ -121,6 +161,78 @@ consume. Nothing in the pipeline trains today — faster-whisper runs on
 CTranslate2, an inference-only runtime — so "learning" here means the alias
 table, not model weights.
 
+### `audio_capture.py` and `resample.py`
+
+One `AudioCapture` per source, and it does not care whether the audio comes
+from an SDR loopback, a USB sound card fed by a radio's speaker jack, or a
+microphone. The differences between those are three settings — sample rate,
+channel, and level — so they are handled here rather than pushed onto the
+operator.
+
+Sample rate is the one with real substance. A loopback sink can be told to run
+at 16 or 48 kHz; a microphone usually cannot, and offers 44.1 kHz, which is not
+an integer multiple of 16 kHz. `resample.py` picks a path automatically:
+
+| Case | Path |
+| --- | --- |
+| Already 16 kHz | passthrough |
+| Integer ratio (48 kHz) | boxcar decimation — the content above 8 kHz on a narrowband voice channel is noise anyway |
+| Anything else (44.1 kHz) | `soxr`, or a windowed-sinc low-pass plus linear interpolation if it is not installed |
+
+The low-pass is not a nicety. Fold 15 kHz content down into the voice band and
+it lands on top of the speech, costing accuracy on exactly the fast,
+run-together delivery that is already hardest to transcribe. `test_resample.py` runs its
+signal checks against **both** engines, because otherwise the fallback would be
+dead code everywhere except a Pi in the field.
+
+### `ring_buffer.py`
+
+Storage allocated once and reused, sitting between the PortAudio callback and
+the VAD. The callback previously built a `bytes` object per block — 33
+allocations a second, plus the garbage behind them, which on a loaded Pi
+invites xruns that arrive as clicks the VAD then mistakes for speech.
+
+Honest caveat: this is Python, the callback still takes the GIL, and nothing
+here is hard real-time. Removing the per-block allocation removes the part that
+was ours to remove.
+
+Overrun drops the **oldest** audio. If the reader has fallen behind, old frames
+belong to a transmission that was already truncated, so overwriting them loses
+nothing salvageable, while the newest audio is a transmission that might still
+be logged intact.
+
+### `clip_spill.py`
+
+The last line of defence, and the stage that makes the whole design's promise
+true: **a slow machine makes transcripts late, never missing.**
+
+Clips become WAVs with a JSON sidecar, written oldest-first and read back
+oldest-first, so a backlog drains in transmission order. The STT thread takes
+live clips first and only touches the spill when the queue runs dry — during a
+net, the line that matters is the one being spoken now.
+
+The trade is explicit and visible: a spilled line appears late, flagged `late`
+on the dashboard, but sits in its correct place in the log because
+`TranscriptStore` inserts by timestamp rather than arrival. An exported net
+report that reads out of order would be worse than a late line.
+
+### `health.py`
+
+Built around the failure that actually bites: not a crash, which is obvious,
+but the pipeline that stays up while producing nothing — the SDR app closed,
+the sink repointed, the squelch shut. The dashboard looks fine and forty
+minutes of the net go unlogged.
+
+So it watches for *silence where there should be sound*, at three levels:
+frames arriving at all, signal within those frames, and whether the machine is
+keeping up. Times come from an injectable clock, so a five-minute silence is
+tested in microseconds and the suite never sleeps.
+
+`HealthFleet` holds one monitor per source and reduces them to a single
+verdict: worst state wins, and issues are prefixed with the source name
+whenever there is more than one. With two radios in the room, "the pipeline is
+unhealthy" is not an instruction anybody can act on.
+
 ### `vad_segmenter.py`
 
 A state machine with pre-roll and hangover:
@@ -152,11 +264,32 @@ The confidence number is `exp(avg_logprob)`, duration-weighted. It is a
 monotonic proxy, not a calibrated probability — fine for colouring a cell,
 not for making decisions.
 
+### `transcript_store.py`
+
+An in-memory list, with one rule that matters: entries are inserted **by
+timestamp**, not by arrival. A clip recovered from the disk backlog arrives
+after later ones but was spoken earlier, and belongs where it was spoken.
+
+Corrections keep `original_callsign`, so the log still records where the
+machine was wrong — that record is the point, not an embarrassment to hide.
+
 ### `config.py`
 
 YAML plus `NETSTT_<SECTION>_<KEY>` env overrides, with env winning. The env
 layer exists so the container image is configurable without baking a config
 file into it. Unknown YAML keys are ignored rather than fatal.
+
+`sources:` (a list) and the single `audio:` block are both valid;
+`audio_sources()` resolves whichever is present. Breaking every existing config
+to add a feature most operators will not use would be a poor trade.
+
+### `logging_setup.py`
+
+Console for the operator during the net, rotating file for the morning after,
+when someone asks why a station is missing from the log — so the file keeps
+more detail than the console shows. A file that cannot be opened (read-only
+media, wrong owner in a container) is reported and skipped rather than fatal:
+losing the log is not a reason to lose the net.
 
 ## Design decisions
 
@@ -169,6 +302,12 @@ sources queue together and are transcribed in arrival order.
 
 Entries are tagged with their source only when more than one is configured —
 a source column on every line of a single-receiver net is noise.
+
+**Receivers are weighted, not uniform.** A repeater arrives strong and carries
+the net; a staging channel may be weak and slow. So VAD settings are per-source
+(falling back to the global block), `gain` levels the inputs, and `priority`
+orders the shared clip queue — the frequency the net runs on should not wait
+behind side traffic when the transcriber is behind.
 
 **In-memory transcripts.** This is a session tool, not an archive. A database
 would add a dependency and a migration story for something that gets exported

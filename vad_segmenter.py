@@ -46,6 +46,8 @@ class Clip:
     """Which receiver heard this. Empty when only one source is configured."""
     sequence: int = 0
     """Monotonic per session; orders the disk backlog."""
+    priority: int = 0
+    """From the source. Higher is transcribed first when there is a backlog."""
 
 
 @dataclass

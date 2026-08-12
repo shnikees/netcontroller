@@ -31,16 +31,27 @@ audio:
 # receiver does not take the net down. They share one Whisper model: it is the
 # memory-hungry part, and two on a Pi would thrash rather than go faster.
 #
+# Receivers differ, so most settings can be overridden per source. A strong
+# repeater and a weak simplex signal want different VAD sensitivity, and the
+# repeater's traffic should reach the log first when the transcriber is behind.
+#
 # sources:
 #   - name: Repeater          # shown on every line this source produces
 #     device: repeater_sink.monitor
+#     priority: 10            # higher goes first when there is a backlog
 #     gain: 1.0
 #   - name: Simplex
 #     device: simplex_sink.monitor
 #     channel: left
+#     gain: 4.0               # weaker signal, needs the level brought up
+#     aggressiveness: 1       # gentler VAD, or quiet stations get dropped
+#     silence_ms: 1200        # slower, more deliberate traffic
 #   - name: Spare
 #     device: "USB Audio CODEC"
 #     enabled: false          # configured, not opened tonight
+#
+# Any of aggressiveness, silence_ms, min_clip_ms, preroll_ms and trigger_ratio
+# can be set per source; anything omitted inherits the global `vad:` block.
 #
 # `file:` replays a recording instead of opening a device, so a two-receiver
 # setup can be tuned offline the way --file does for one.
