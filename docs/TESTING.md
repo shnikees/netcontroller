@@ -64,6 +64,19 @@ cases — not evidence the matcher will hold up on the air. Real audio is the
 only thing that proves that, which is what
 [FIELD-BRINGUP.md](FIELD-BRINGUP.md) is for.
 
+## Tuning against real audio
+
+`tools/tune.py` measures the thresholds that `tools/make_test_audio.py` cannot
+tell you anything about:
+
+```bash
+python tools/tune.py --audio net-recording.wav --roster roster.csv
+```
+
+Synthetic speech is uniform, so it cannot say how long *your* operators pause
+or how much dead air sits between two stations on *your* repeater. A recording
+can, and the roster does the labelling.
+
 ## Adding a regression
 
 This is the main maintenance loop, and it is deliberately cheap. When a real

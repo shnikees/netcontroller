@@ -83,6 +83,21 @@ python app.py
 Open <http://localhost:8080>. The first run downloads the Whisper model; after
 that it works with no network at all.
 
+## Tuning against your own net
+
+Every threshold here ships as a reasoned guess about how a net sounds. Record
+ten minutes of your own traffic and measure them instead:
+
+```bash
+python tools/tune.py --audio net-recording.wav --roster roster.csv
+```
+
+It sweeps the VAD and split thresholds, checks your audio level, and prints a
+config block. There is no labelling step — the roster supplies the ground
+truth, since a good setting is one where each clip resolves to exactly one
+station. Where two candidates are indistinguishable on your recording, it says
+so rather than picking one and pretending.
+
 ## Before you go live: replay a recording
 
 Do this first. It lets you tune the VAD and see how the matcher handles your

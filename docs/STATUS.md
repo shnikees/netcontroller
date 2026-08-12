@@ -42,9 +42,21 @@ an order where each step fails in a way you can diagnose.
 ## Not proven: every tuning constant
 
 These are guesses. They are *reasoned* guesses, and several have arithmetic
-behind them, but not one has met a real net. **One recorded net through
-`--file` replaces the entire table with measurements** — which is why the
-bring-up doc puts recording ten minutes of traffic before anything else.
+behind them, but not one has met a real net. **One recorded net replaces most
+of this table with measurements**, and `tools/tune.py` does the measuring:
+
+```bash
+python tools/tune.py --audio net-recording.wav --roster roster.csv
+```
+
+No hand-labelling — the roster is the supervision. A good setting is one where
+each clip comes out as exactly one confident roster match; a setting that runs
+two stations together leaves two callsigns in one clip, and one that cuts too
+early leaves fragments with none. Both are countable without anyone
+transcribing anything by hand.
+
+It reports the evidence rather than just a verdict, and says so plainly when
+two candidates are indistinguishable on the audio you gave it.
 
 | Setting | Default | What it is guessing about |
 | --- | --- | --- |
@@ -53,7 +65,7 @@ bring-up doc puts recording ten minutes of traffic before anything else.
 | `split.min_gap_ms` | 500 | The gap between two stations keying up, versus a pause mid-sentence |
 | `voice.min_similarity` | 0.82 | How alike two recordings of one operator look over FM |
 | `escalation.min_confidence` | 0.55 | Where "unsure" begins for your audio |
-| `audio.gain` | 1.0 | Entirely dependent on what you plugged into what |
+| `audio.gain` | 1.0 | Entirely dependent on what you plugged into what — measured, not searched: `tune.py` reads the level and solves for it |
 
 `roster.threshold` (78) is the exception: it sits just under the 80 that one
 wrong character in a five-character callsign scores, which is arithmetic rather
@@ -87,8 +99,12 @@ Roughly in order of value per effort:
 5. **Session recovery.** A crashed net leaves a complete `transcripts/*.jsonl`,
    but nothing reads it back in. A `--resume` flag would let a restarted app
    continue the same log rather than starting a second one.
-6. **CI** — done: GitHub Actions runs the suite on 3.11-3.13 plus a
-   minimal-dependency job that exercises the Pi fallbacks.
+6. **Extend the tuner** to the two thresholds it does not yet cover.
+   `escalation.min_confidence` can be read straight off the confidence
+   distribution of matched versus unmatched lines, and `voice.min_similarity`
+   from intra- versus inter-speaker scores once a net's worth of check-ins has
+   been confirmed. Both are calibrations on data the app already collects, so
+   neither needs a recording session of its own.
 
 ## Known limitations, not bugs
 
