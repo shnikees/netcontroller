@@ -71,6 +71,19 @@ vad:
   preroll_ms: 300
   trigger_ratio: 0.7
 
+# Two stations that key up inside vad.silence_ms of each other arrive as one
+# clip. This splits them back apart -- but only where Whisper's word timings
+# show real dead air between them, because "W6ABC here, traffic for K7XYZ" has
+# two callsigns and one speaker, and inventing a check-in is worse than missing
+# one.
+split:
+  enabled: true
+  # Dead air before two callsigns count as two transmissions. Sits between the
+  # pauses inside one person's speech and vad.silence_ms above it.
+  min_gap_ms: 500
+  # Refuse a split that would log a sliver as a check-in.
+  min_segment_ms: 400
+
 whisper:
   # tiny | base | small | medium | large-v3
   # base is the default: it keeps up on a laptop CPU during a live net.

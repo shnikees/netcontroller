@@ -27,12 +27,25 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
+class Word:
+    """One word with its timing, used to find the pause between two stations."""
+
+    text: str
+    start: float
+    end: float
+    offset: int
+    """Character offset into Transcription.text, so a callsign found in the
+    text can be located in time."""
+
+
+@dataclass
 class Transcription:
     text: str
     confidence: float
     """0-1, derived from Whisper's avg_logprob. Rough, but good for a UI cue."""
     language: str = ""
     no_speech_prob: float = 0.0
+    words: list[Word] = field(default_factory=list)
 
 
 @dataclass
@@ -52,6 +65,9 @@ class SttWorker:
     initial_prompt: str = ""
     beam_size: int = 5
     language: str | None = "en"
+    word_timestamps: bool = True
+    """Needed to split a clip that caught two stations: the pause between them
+    is only visible in the timings."""
     _model: object | None = field(default=None, init=False, repr=False)
 
     def load(self) -> None:
@@ -95,12 +111,14 @@ class SttWorker:
             initial_prompt=self.initial_prompt or None,
             vad_filter=False,  # the segmenter already did this
             condition_on_previous_text=False,  # transmissions are independent
+            word_timestamps=self.word_timestamps,
         )
         segments = list(segments)
         text = " ".join(s.text.strip() for s in segments).strip()
         confidence = _confidence(segments)
         return Transcription(
             text=text,
+            words=_words(segments, text),
             confidence=confidence,
             language=getattr(info, "language", "") or "",
             no_speech_prob=(
@@ -109,6 +127,29 @@ class SttWorker:
                 else 1.0
             ),
         )
+
+
+def _words(segments: list, text: str) -> list[Word]:
+    """Flatten Whisper's per-word timings and locate each word in `text`.
+
+    The offsets are found by scanning forward through the joined text, which
+    keeps them correct even though joining the segments changed the spacing.
+    """
+    words: list[Word] = []
+    cursor = 0
+    for segment in segments:
+        for word in getattr(segment, "words", None) or []:
+            stripped = word.word.strip()
+            if not stripped:
+                continue
+            found = text.find(stripped, cursor)
+            if found < 0:  # shouldn't happen, but never guess an offset
+                continue
+            cursor = found + len(stripped)
+            words.append(
+                Word(text=stripped, start=word.start, end=word.end, offset=found)
+            )
+    return words
 
 
 def _confidence(segments: list) -> float:

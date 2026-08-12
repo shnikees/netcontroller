@@ -98,7 +98,9 @@ for this step. You are looking for one `INFO net-stt:` line per transmission.
 **One check-in becomes three log lines:** raise `vad.silence_ms`. Operators who
 spell their callsign slowly need more; 1200 is not unreasonable.
 
-**Two stations merge into one line:** lower `vad.silence_ms` toward 500.
+**Two stations merge into one line:** the splitter should catch this (see step
+6), but you can also lower `vad.silence_ms` toward 500 so the VAD separates
+them in the first place.
 
 Tune this against a *recording* of your net rather than live traffic if you can
 — record 10 minutes with `parecord`, then iterate with `--file`. Each pass is
@@ -109,11 +111,32 @@ seconds instead of a week.
 Time from end-of-transmission to the line appearing. A few seconds is fine; a
 net moves slower than that.
 
-If it lags: drop to a smaller model, or watch for `AudioCapture.overflows`
-climbing, which means the machine cannot keep up and is dropping audio. On a
-Pi, `base` is roughly the ceiling for a Pi 4 and `small` for a Pi 5.
+If it lags, the banner will tell you before you notice it yourself: clips
+spilling to disk means the machine cannot keep up. Drop a model size. On a Pi,
+`base` is roughly the ceiling for a Pi 4 and `small` for a Pi 5 — and note that
+two receivers share one model, so a second source roughly doubles the load.
 
-## 5. Check the matcher against your real roster
+Lateness is no longer data loss: a slow machine makes lines arrive late and
+flagged, not missing. But a net that is permanently behind is still worth
+fixing.
+
+## 5. If you run more than one receiver
+
+Bring each one up **on its own first**, using the steps above with only that
+source enabled. Two receivers failing at once is much harder to diagnose than
+one, and `enabled: false` lets you park the second while you sort out the first.
+
+Once both are up, the dashboard gives each a tab, and the first source listed
+is the default view — put the repeater there. Watch for:
+
+- The level on each source. They will not match; `gain` is per source for
+  exactly this reason.
+- Whether the weaker receiver needs a gentler `aggressiveness` or a longer
+  `silence_ms` than the repeater. Both are per-source overrides.
+- The health dot on each tab. A source that never opened shows there, not just
+  in the banner.
+
+## 6. Check the matcher against your real roster
 
 This is where the interesting failures are, and the reason the vocabulary
 tables exist. Have a few known stations check in and watch the callsign column.
@@ -131,16 +154,36 @@ your net's specific failure modes.
 unmatched line. Raise `roster.threshold` or `roster.ambiguity_margin` and file
 the transcript as a test case.
 
-## 6. Run a real net
+**If two stations key up back to back**, they can land in one clip. The app
+splits those into separate lines when it can hear real dead air between them
+(`split.min_gap_ms`, default 500 ms). Two things to check on a fast net:
 
-Keep a paper log the first time. Compare afterwards, and export the session:
+- A station who merely *names* another station ("W6ABC here, traffic for
+  K7XYZ") must stay one line. If those are being logged as two check-ins,
+  raise `split.min_gap_ms`.
+- Two stations that were logged as one line mean the pause between them was
+  shorter than the threshold. Lower it, or lower `vad.silence_ms` so the VAD
+  separates them before the splitter has to.
+
+## 7. Run a real net
+
+Keep a paper log the first time, and compare afterwards.
+
+**You do not have to remember to save anything.** The session is written to
+`transcripts/` as it happens — a `.jsonl` fsynced line by line, and a `.txt`
+kept in transmission order. If the app crashes, the Pi loses power, or somebody
+closes the laptop, the log is already on disk; a power cut costs at most the
+last line. This was tested with `kill -9` mid-net and no cleanup at all.
+
+For an extra copy at a specific moment:
 
 ```bash
 curl -X POST localhost:8080/api/export
 ```
 
-The text log is also written automatically on Ctrl-C, so a clean exit never
-loses the session.
+If something does go wrong, **leave `transcripts/` alone** and check it before
+restarting — the file from the interrupted session is still there, and a
+restart writes a new one rather than overwriting it.
 
 ## Known-unverified list
 
@@ -149,13 +192,19 @@ bite:
 
 - **Device selection by name substring** (`audio_capture.find_device`) against
   real PulseAudio device names.
-- **48 kHz → 16 kHz decimation** (`AudioCapture._downsample`). The logic is
-  simple and unit-testable in principle, but it has only ever run on audio that
-  was already 16 kHz.
-- **Overflow handling** under sustained load — the drop path has never been hit.
+- **Overflow handling** under sustained load — the ring buffer's drop path is
+  unit-tested but has never been hit by a real machine falling behind.
+- **A device that disappears mid-net** (USB SDR unplugged). The restart-with-
+  backoff path is exercised against a device that never existed, not one that
+  vanished while streaming.
 - **`vad.*` defaults** against real receiver audio. They were tuned on
   synthesized speech, which is cleaner and more consistent than anything off
   the air.
+- **`split.min_gap_ms`** against real back-to-back transmissions. The logic is
+  tested, but the 500 ms threshold is a guess about how your net actually
+  sounds.
+- **Two receivers running at once on real hardware.** Tested with two recorded
+  files, never with two sound cards.
 - **Whisper accuracy on weak/noisy signals.** TTS test audio makes the pipeline
   look considerably better than it will be on a marginal simplex signal.
 - **CUDA auto-detection**, if you plan to use a GPU.

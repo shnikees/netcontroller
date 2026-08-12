@@ -46,6 +46,9 @@ callsign matching, dashboard, export, container image — is tested and works.
   without an SDR, and how to add a regression when a net surfaces a new
   mis-transcription
 
+Deployment files live in [deploy/](deploy/) (a systemd unit) and at the repo
+root (`Containerfile`, `docker-compose.yml`).
+
 ## Quick start
 
 ```bash
@@ -201,6 +204,13 @@ The settings that actually matter in the field:
 | `vad.aggressiveness` | 3 | Lower to 1–2 if quiet stations are being missed entirely. |
 | `roster.threshold` | 78 | Raise for fewer wrong matches, lower for fewer "unmatched" lines. See below. |
 | `whisper.model_size` | base | See the table below. |
+| `split.min_gap_ms` | 500 | Raise if a station naming another is logged as two check-ins; lower if back-to-back stations are merged into one line. |
+| `audio.gain` | 1.0 | Line in and mic only — a level that is too low costs accuracy. Per source when you have several. |
+| `transcripts.live` | true | Leave on. It is what makes a crash cost nothing. |
+
+Everything under `vad:` can also be set **per source**, which is what you want
+when a strong repeater and a weak simplex receiver share one app — see
+[Multiple receivers](#multiple-receivers).
 
 ### Choosing a model
 
@@ -228,6 +238,24 @@ Two settings interact with fast nets and are worth knowing about:
   fast net, and check the log for lines containing two check-ins.
 - **`whisper.vocabulary`** — adding the phrases your net actually uses biases
   decoding, which helps most exactly when speech is quick and clipped.
+
+### When two stations land in one clip
+
+If stations key up inside `vad.silence_ms` of each other, the VAD hands both to
+Whisper as a single clip. The app splits those back into separate log lines —
+but only on evidence, because these two transcripts look identical:
+
+```
+"W6ABC checking in"  …pause…  "K7XYZ also checking in"    two stations
+"W6ABC here, I have traffic for K7XYZ"                    one station
+```
+
+What tells them apart is the **pause**: two transmissions have dead air where
+one operator unkeys and another keys up, and a sentence naming somebody else
+does not. So the split is decided on Whisper's word timings, never on the text.
+`split.min_gap_ms` (default 500) is how much dead air it takes; raise it if a
+station naming another is being logged as two check-ins, lower it if genuine
+back-to-back stations are being merged. `split.enabled: false` turns it off.
 
 CUDA is detected automatically (`whisper.device: auto`); set it to `cpu` or
 `cuda` to force one.
@@ -369,14 +397,23 @@ quiet before it is worth telling you about.
 ## Dashboard
 
 - Matched stations in bold green; unmatched lines flagged amber with the
-  callsign that was heard.
+  callsign that was heard. Click any callsign to fix it — the app
+  [learns the correction](#corrections-and-what-the-app-learns-from-them).
+- **A tab per receiver** when you run more than one, with the first configured
+  source as the default view, a health dot per tab, and an unread count so a
+  check-in on another frequency is not missed. An **All** tab interleaves them.
 - Roster sidebar doubles as a check-in list — stations light up as they check
   in, with a count. Click one to filter the log to that station.
-- **Auto-scroll** toggle for reviewing history mid-net without fighting the log.
+- Lines recovered from the backlog are marked **late**, and sit in their correct
+  place in time rather than at the bottom.
+- **Alerts** toggle for the beep that accompanies the health banner; **Auto-
+  scroll** toggle for reviewing history mid-net without fighting the log.
 - **Export log** writes a CSV and a text log to `export_dir` on demand — but you
-  do not have to remember to press it (see below).
+  do not have to remember to press it, because the session is
+  [written continuously](#transcripts-are-written-as-the-net-runs).
 
-The page reconnects on its own if the app restarts.
+The page reconnects on its own if the app restarts, and says so plainly while
+it is disconnected rather than showing a stale log as though it were live.
 
 ## Tests
 
@@ -384,7 +421,7 @@ The page reconnects on its own if the app restarts.
 .venv/bin/python -m pytest
 ```
 
-177 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+191 tests, all offline, no audio hardware needed. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 
@@ -433,4 +470,5 @@ version, your changes have to be available under the GPL too.
   net and not much else.
 - The confidence figure comes from Whisper's `avg_logprob`. It is a useful
   relative cue and not a calibrated probability.
-- Transcripts live in memory for the session; export before you close it.
+- One Whisper model is shared across receivers, so two busy frequencies
+  serialise rather than transcribe in parallel.

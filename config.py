@@ -109,6 +109,20 @@ class VadConfig:
 
 
 @dataclass
+class SplitConfig:
+    """Splitting a clip that caught two stations keying up back to back."""
+
+    enabled: bool = True
+    min_gap_ms: int = 500
+    """Dead air between two callsigns before they count as two transmissions.
+    Must sit below vad.silence_ms (or the VAD would have split them already)
+    and above the pauses inside one person's speech. Raise it if a station
+    naming another station is being logged as two check-ins."""
+    min_segment_ms: int = 400
+    """Discard a split that would produce a sliver; more likely a mis-timing."""
+
+
+@dataclass
 class WhisperConfig:
     model_size: str = "base"
     device: str = "auto"
@@ -209,6 +223,7 @@ class Config:
     sources: list[SourceConfig] = field(default_factory=list)
     """Multiple receivers. Empty means use the single `audio:` block."""
     vad: VadConfig = field(default_factory=VadConfig)
+    split: SplitConfig = field(default_factory=SplitConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     roster: RosterConfig = field(default_factory=RosterConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
@@ -253,6 +268,7 @@ def load_config(path: str | Path | None) -> Config:
 _SECTIONS = {
     "audio": AudioConfig,
     "vad": VadConfig,
+    "split": SplitConfig,
     "whisper": WhisperConfig,
     "roster": RosterConfig,
     "server": ServerConfig,

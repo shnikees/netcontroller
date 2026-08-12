@@ -50,6 +50,7 @@ import uvicorn
 
 from audio_capture import TARGET_RATE, AudioCapture, list_devices
 from callsign_match import CallsignMatcher, load_roster
+from clip_split import Segment, split_transmissions
 from clip_spill import SpillStore
 from config import Config, SourceConfig, audio_sources, load_config
 from feedback import FeedbackLog
@@ -63,6 +64,10 @@ from transcript_store import TranscriptStore
 from vad_segmenter import VadSegmenter
 
 log = logging.getLogger("net-stt")
+
+
+STOP_SENTINEL = (-(10**9), -1, None)
+"""Ordered ahead of every real clip, so stop() is never queued behind a backlog."""
 
 
 class AudioUnavailable(RuntimeError):
@@ -365,7 +370,10 @@ class Pipeline:
         self._stop.set()
         for source in self.sources:
             source.stop()
-        self._clips.put(None)  # release the STT thread from its wait
+        # Sentinel must be comparable with the (priority, sequence, clip)
+        # tuples in the queue, and must sort ahead of them so shutdown is not
+        # stuck behind a backlog.
+        self._clips.put(STOP_SENTINEL)
         if self._stt_thread is not None:
             self._stt_thread.join(timeout=5)
 
@@ -437,7 +445,7 @@ class Pipeline:
             except queue.Empty:
                 self._drain_one_spilled()
                 continue
-            if item is None:
+            if item[2] is None:
                 return
             self._handle_clip(item[2], late=False)
 
@@ -475,16 +483,52 @@ class Pipeline:
             log.debug("Empty transcription for %.1fs clip", clip.duration_ms / 1000)
             return
 
-        result = self.matcher.match(transcription.text)
+        # Usually one transmission per clip. On a fast net two stations key up
+        # inside the VAD's silence window and land in the same one.
+        try:
+            segments = self._segments(clip, transcription)
+        except Exception as exc:
+            health.note_error(f"split failed: {exc}")
+            log.exception("Could not split clip; logging it as one transmission")
+            segments = [
+                Segment(transcription.text, 0, clip.duration_ms)
+            ]
+        for segment in segments:
+            self._log_transmission(clip, segment, started_at, transcription, late)
+
+    def _segments(self, clip, transcription) -> list[Segment]:
+        whole = [
+            Segment(
+                text=transcription.text,
+                start_offset_ms=0,
+                duration_ms=clip.duration_ms,
+            )
+        ]
+        if not self.config.split.enabled:
+            return whole
+        return split_transmissions(
+            transcription.text,
+            transcription.words,
+            self.matcher.match_all(transcription.text),
+            clip.duration_ms,
+            min_gap_ms=self.config.split.min_gap_ms,
+            min_segment_ms=self.config.split.min_segment_ms,
+        )
+
+    def _log_transmission(
+        self, clip, segment: Segment, clip_started_at, transcription, late: bool
+    ) -> None:
+        started_at = clip_started_at + timedelta(milliseconds=segment.start_offset_ms)
+        result = self.matcher.match(segment.text)
         entry = self.store.add(
             started_at=started_at,
             matched=result.matched,
             matched_callsign=result.callsign,
             operator_name=result.name,
-            raw_text=transcription.text,
+            raw_text=segment.text,
             confidence=transcription.confidence,
             match_score=result.score,
-            clip_duration=clip.duration_ms / 1000,
+            clip_duration=segment.duration_ms / 1000,
             candidate=result.candidate,
             unmatched_reason=result.reason,
             via_alias=result.via_alias,

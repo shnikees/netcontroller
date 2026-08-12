@@ -32,6 +32,8 @@ is shared.
                                ▼
                     callsign_match.py   aliases → normalize → extract → fuzzy match
                                │  MatchResult(matched, callsign, score, …)
+                    clip_split.py   two stations in one clip? split on the pause
+                               │  one Segment per transmission
                                ▼
                     transcript_store.py   in-memory log, ordered by timestamp
                                │      │  every line, as it happens
@@ -63,6 +65,7 @@ code. `app.py` wires everything together and owns the process lifecycle.
 | `clip_spill.py` | Disk overflow when the transcriber is behind |
 | `stt_worker.py` | faster-whisper wrapper |
 | `callsign_match.py` | Normalizer + roster matcher — the domain logic |
+| `clip_split.py` | Splits a clip that caught two stations into separate lines |
 | `feedback.py` | Operator corrections, and the aliases learned from them |
 | `transcript_store.py` | Session log, ordering, CSV/text export |
 | `session_writer.py` | Streams the session to disk as it happens |
@@ -134,6 +137,28 @@ will not notice a plausible wrong callsign in a scrolling log.
 The vocabulary tables (`PHONETIC_MAP`, `DIGIT_MAP`, `AMBIGUOUS_DIGIT_MAP`) are
 the main tuning surface. They are meant to grow as real nets surface new
 mis-transcriptions — see [TESTING.md](TESTING.md).
+
+### `clip_split.py`
+
+On a fast net, stations key up inside the VAD's silence window and arrive as
+one clip. Finding the second callsign is easy — the matcher already does. The
+hard part is telling these apart:
+
+```
+"W6ABC checking in"  …pause…  "K7XYZ also checking in"    two stations
+"W6ABC here, I have traffic for K7XYZ"                    one station
+```
+
+The transcripts are indistinguishable. What separates them is the **pause**, so
+the decision is made on Whisper's word timings and never on the text — which is
+why `stt_worker.py` asks for `word_timestamps`.
+
+The bias matches the matcher's: when the evidence is weak, keep it as one line.
+An over-eager split invents a check-in that never happened, and nobody reading
+the log will know to doubt it — the same reasoning behind preferring
+"unmatched" to a guess. Splits are refused when there is no qualifying gap, no
+word timings at all, fewer than two distinct roster stations, or when a segment
+would come out too short to be a transmission.
 
 ### `feedback.py`
 

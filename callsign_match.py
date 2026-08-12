@@ -180,6 +180,9 @@ class MatchResult:
     """Why an unmatched result was rejected: no_candidate/below_threshold/ambiguous."""
     via_alias: bool = False
     """True when an operator correction, not fuzzy matching, produced this."""
+    start: int = -1
+    end: int = -1
+    """Where in the raw transcript this callsign was heard; -1 when unknown."""
 
 
 # --------------------------------------------------------------------------
@@ -253,45 +256,73 @@ def _split_glued_phonetics(token: str) -> list[str]:
     return result if result and len(result) > 1 else [token]
 
 
+@dataclass(frozen=True)
+class Token:
+    """A normalized token, and the span of raw text it came from."""
+
+    text: str
+    start: int
+    end: int
+
+
 def normalize(text: str) -> str:
     """Turn spoken-form transcript text into a compact letters/digits string.
 
     Phonetics become letters, spoken digits become numerals, filler is dropped,
     and runs of adjacent single characters are glued into callsign-shaped tokens.
     """
+    return " ".join(token.text for token in tokenize(text))
+
+
+def tokenize(text: str) -> list[Token]:
+    """normalize(), but keeping each token's position in the original text.
+
+    The positions are what let a clip containing two stations be split at the
+    right place: find the callsigns in the text, then find the pause between
+    them in the word timings.
+    """
     lowered = text.lower()
     # Keep letters, digits, and the hyphen/apostrophe that appear inside
     # vocabulary entries ("x-ray", "niner's"); everything else is a separator.
-    raw_tokens = re.findall(r"[a-z0-9'\-]+", lowered)
+    matches = list(re.finditer(r"[a-z0-9'\-]+", lowered))
 
     expanded: list[str] = []
-    for token in raw_tokens:
-        for part in _split_hyphens(token):
+    spans: list[tuple[int, int]] = []
+    for match in matches:
+        for part in _split_hyphens(match.group()):
             for piece in _split_glued_phonetics(part):
                 expanded.append(piece)
+                # Every piece of a split token points at the whole token; good
+                # enough to locate a callsign, and simpler than sub-spans.
+                spans.append((match.start(), match.end()))
 
-    out: list[str] = []
+    out: list[Token] = []
     for i, token in enumerate(expanded):
+        start, end = spans[i]
+
+        def emit(value: str) -> None:
+            out.append(Token(value, start, end))
+
         if token in PHONETIC_MAP:
-            out.append(PHONETIC_MAP[token])
+            emit(PHONETIC_MAP[token])
         elif token in DIGIT_MAP:
-            out.append(DIGIT_MAP[token])
+            emit(DIGIT_MAP[token])
         elif token in AMBIGUOUS_DIGIT_MAP:
             if _is_digit_position(expanded, i):
-                out.append(AMBIGUOUS_DIGIT_MAP[token])
+                emit(AMBIGUOUS_DIGIT_MAP[token])
             else:
-                out.append(BREAK)
+                emit(BREAK)
         elif token in FILLER_WORDS:
             # A dropped word still separates what was on either side of it.
             # Without this, "W6ABC no traffic K7XYZ" leaves the two callsigns
             # adjacent and they weld into one nonsense token -- losing both
             # stations, which is exactly what happens on a fast net where two
             # people key up inside one VAD gap.
-            out.append(BREAK)
+            emit(BREAK)
         elif re.fullmatch(r"[0-9]+", token):
-            out.append(token)
+            emit(token)
         else:
-            out.append(token.replace("-", "").replace("'", "").upper())
+            emit(token.replace("-", "").replace("'", "").upper())
 
     return _glue_singles(out)
 
@@ -317,34 +348,52 @@ def _is_spelling_token(token: str) -> bool:
     )
 
 
-def _glue_singles(tokens: list[str]) -> str:
+def _glue_singles(tokens: list[Token]) -> list[Token]:
     """Join runs of 1-char tokens into words: [W,6,A,B,C] -> "W6ABC".
 
     BREAK markers end a run without contributing anything themselves, so words
-    that were dropped still keep their neighbours apart.
+    that were dropped still keep their neighbours apart. A glued token spans
+    from the first contributing raw word to the last.
     """
-    result: list[str] = []
-    run: list[str] = []
+    result: list[Token] = []
+    run: list[Token] = []
+
+    def flush() -> None:
+        if run:
+            result.append(
+                Token("".join(t.text for t in run), run[0].start, run[-1].end)
+            )
+            run.clear()
+
     for token in tokens:
-        if token == BREAK:
-            if run:
-                result.append("".join(run))
-                run = []
-        elif len(token) == 1:
+        if token.text == BREAK:
+            flush()
+        elif len(token.text) == 1:
             run.append(token)
         else:
-            if run:
-                result.append("".join(run))
-                run = []
+            flush()
             result.append(token)
-    if run:
-        result.append("".join(run))
-    return " ".join(result)
+    flush()
+    return result
 
 
 # --------------------------------------------------------------------------
 # Candidate extraction
 # --------------------------------------------------------------------------
+
+
+def extract_candidate_tokens(tokens: list[Token]) -> list[Token]:
+    """Callsign-shaped tokens, in the order they were spoken.
+
+    Unlike extract_candidates() this keeps positions and does not reorder, so
+    the caller can line the callsigns up against the word timings.
+    """
+    found: list[Token] = []
+    for token in tokens:
+        text = token.text.upper()
+        if CALLSIGN_RE.fullmatch(text) or LOOSE_CALLSIGN_RE.fullmatch(text):
+            found.append(Token(text, token.start, token.end))
+    return found
 
 
 def extract_candidates(normalized: str) -> list[str]:
@@ -419,6 +468,27 @@ class CallsignMatcher:
         spoken = [_spell_phonetically(c) for c in self._by_callsign]
         parts = list(self._by_callsign) + spoken + list(extra_vocabulary or [])
         return "Amateur radio net check-ins. " + ", ".join(parts) + "."
+
+    def match_all(self, text: str) -> list[MatchResult]:
+        """Every distinct roster station heard in this text, in order.
+
+        A clip can catch two transmissions when stations key up inside one VAD
+        gap. This finds each of them; deciding whether they really were two
+        transmissions is the caller's job, and needs the word timings -- a
+        transcript naming somebody else's callsign ("traffic for K7XYZ") looks
+        identical here.
+        """
+        results: list[MatchResult] = []
+        seen: set[str] = set()
+        for token in extract_candidate_tokens(tokenize(text)):
+            result = self._match_candidate(token.text)
+            if not result.matched or result.callsign in seen:
+                continue
+            seen.add(result.callsign)
+            result.start = token.start
+            result.end = token.end
+            results.append(result)
+        return results
 
     def match(self, text: str) -> MatchResult:
         normalized = normalize(text)

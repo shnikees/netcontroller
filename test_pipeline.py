@@ -70,6 +70,7 @@ class _Transcription:
         self.confidence = 0.9
         self.language = "en"
         self.no_speech_prob = 0.0
+        self.words = []  # no timings, so nothing is ever split
 
 
 def write_net_wav(path: Path, transmissions: int, seconds: float = 1.0) -> None:
