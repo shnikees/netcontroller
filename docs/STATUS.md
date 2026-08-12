@@ -14,15 +14,23 @@ talking to somebody else.
 That shifts what matters, and parts of this app were built assuming the other
 kind of net:
 
-- **The transcript is the product.** Callsign attribution is useful, but a
-  correct verbatim record of what was said is the thing being paid for. On a
-  check-in net it is the other way round.
+- **The callsign is a location.** This is the thing to understand about an
+  event net: operators are posted around the course, so the callsign is how
+  net control knows *where* a transmission came from. "Car off, need a tow" is
+  only actionable once you know it came from Turn 7. Callsign attribution is
+  not secondary to the transcript here — the two together are the product, and
+  a wrong callsign is a wrong location.
+
+  That makes the matcher's existing bias — refuse rather than guess — more
+  right, not less. An unmatched line sends somebody to ask; a confidently
+  wrong one sends help to the wrong part of the course.
+
+- **Voice identification matters more, not less.** Event traffic often carries
+  no callsign at all, and a trailer full of people is exactly where "who said
+  that" is hardest — and, because callsign means position, most consequential.
 - **Everyone speaks repeatedly**, so ordering the prompt by "who has not
   checked in yet" is the wrong prior for this use — attendance frequency and
   recency are better ones.
-- **Voice identification matters more, not less.** Event traffic often carries
-  no callsign at all, and a trailer full of people is exactly where "who said
-  that" is hardest and most useful.
 - **Overlapping and back-to-back speech is the normal case**, not an edge case,
   which puts the splitter and the VAD thresholds on the critical path rather
   than at the margins.
@@ -122,7 +130,17 @@ Roughly in order of value per effort:
    of recent clip audio addressed by entry id, and a play control on the row.
    The clips kept for voice enrolment already prove the storage side works.
 
-3. **A traffic flag on each line.** There is no model of traffic at all today,
+3. **Positions on the roster.** If the callsign is how net control knows where
+   a transmission came from, the app should say so rather than making somebody
+   translate it in their head under pressure. `roster.csv` already takes an
+   optional third column; a fourth for the operator's post — "Turn 7", "Mile
+   8", "Medical 1", "Sweep" — would let the dashboard show *where* beside
+   *who*, and put it in the exported log.
+
+   Small change, and it makes the existing refuse-rather-than-guess bias
+   legible: an unmatched line is visibly a transmission from an unknown place.
+
+4. **A traffic flag on each line.** There is no model of traffic at all today,
    and a net exists partly to move it. The phrasing is stereotyped enough to
    detect — "with traffic", "I have traffic for", against "no traffic" and
    "nothing for the net" — which makes it cheap, with one real trap: the
@@ -133,7 +151,7 @@ Roughly in order of value per effort:
    working list during the net rather than something reconstructed afterwards.
    Borrowed from ham-net-tracker, which models this properly.
 
-4. **Expected stations from history.** The roster is hand-maintained; the
+5. **Expected stations from history.** The roster is hand-maintained; the
    transcripts already record who actually turns up. Deriving attendance from
    past sessions gives a better prior for prompt biasing than roster order —
    on an event net, frequency and recency beat "not yet heard from" — and it
@@ -144,7 +162,7 @@ Roughly in order of value per effort:
    became a "station" would then bias decoding toward its own mistake, so
    anything not on the roster stays a suggestion for a human.
 
-5. **A better voice embedder.** The current one is log-mel cepstral statistics
+6. **A better voice embedder.** The current one is log-mel cepstral statistics
    in numpy — 24 numbers describing average timbre, never trained to tell one
    speaker from another. It also conflates the voice with the *channel*, so a
    profile is really "Frank on his HT" and breaks when he checks in mobile.
@@ -166,15 +184,15 @@ Roughly in order of value per effort:
    `tools/rebuild_voices.py --compare` scores both embedders on identical
    audio.
 
-6. **Benchmark alternatives to Whisper.** NVIDIA Parakeet is faster and scores
+7. **Benchmark alternatives to Whisper.** NVIDIA Parakeet is faster and scores
    better on English; Riva offers real *word boosting*, which is a proper
    answer to the 224-token prompt ceiling rather than a workaround. `stt_worker.py`
    is the only module that knows which engine is in use.
-7. **Make matching source-aware.** Per-frequency rosters currently bias
+8. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
    would cut wrong matches on a 100-station roster — carefully, since people do
    turn up on the other frequency.
-8. **Review after the net, not during it.** Everything self-supervised is in
+9. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards

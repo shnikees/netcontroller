@@ -8,7 +8,11 @@ a browser dashboard that net control can read from across the table.
 Built for a **high-traffic event or race net** — the kind run from a trailer
 with several people talking at once, where the question is *"what was that last
 transmission?"* and the answer has to be on screen rather than in somebody's
-memory. It works for an orderly weekly check-in too, but that is the easy case.
+memory. On an event net the callsign is also a *location*: operators are posted
+around the course, so knowing who transmitted is knowing where it came from —
+which is why this app would rather log a line as unmatched than attach a
+plausible wrong callsign to it. It works for an orderly weekly check-in too,
+but that is the easy case.
 
 Fully offline — no cloud services, nothing leaves the machine. Whisper runs
 locally.
