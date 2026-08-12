@@ -165,6 +165,14 @@
     text-transform: uppercase; vertical-align: 0.15em;
     background: var(--unmatched); color: #1a1205; border-radius: 4px;
   }
+  .traffic[role="button"] { cursor: pointer; }
+  .traffic[role="button"]:hover { filter: brightness(1.15); }
+  /* Passed traffic stays visible rather than disappearing: what was handled is
+     part of the account of the net. */
+  .traffic.cleared {
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--line); font-weight: 600;
+  }
   .traffic-dot { color: var(--unmatched); margin-right: 0.35rem; }
   .late-mark {
     display: block; font-size: 0.65rem; color: var(--unmatched);

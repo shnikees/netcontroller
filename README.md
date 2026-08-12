@@ -446,7 +446,24 @@ declaration and marked:
 
 The dashboard badges those lines, counts them in the header, marks the holding
 stations in the sidebar, and the count doubles as a filter — one click shows
-only the traffic. The exported log lists who declared traffic at the bottom.
+only the traffic.
+
+**Click the badge when the traffic has been passed** and it clears: the badge
+turns to `passed`, the station drops off the outstanding list, and the header
+count goes down. That makes it a working list that empties rather than a tally
+that only grows. Clicking again puts it back, because a mis-click during a
+busy net should cost a second click and not a restart — and the declaration is
+never erased, so the exported log separates what is outstanding from what was
+handled:
+
+```
+Traffic outstanding: KD9MNO
+Traffic passed: K7XYZ
+```
+
+Both halves are optional — `traffic.detect: false` removes the badges
+entirely, and `traffic.acknowledge: false` keeps the badges as a read-only
+marker.
 
 There are three states, not two: **declared traffic**, **explicitly none**
 ("no traffic", "nothing for the net"), and **did not say**. Only the first is
@@ -652,7 +669,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-300 tests, all offline, no audio hardware needed — CI runs them on every push
+309 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

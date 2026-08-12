@@ -34,6 +34,7 @@ const toast = document.getElementById("toast");
 let autoScroll = true;
 let filter = null;
 let trafficOnly = false;
+let canAcknowledgeTraffic = true;
 let roster = [];
 let sources = [];
 /* The active tab is a source name, or ALL for the combined view. The first
@@ -201,8 +202,18 @@ function paintRow(row, entry) {
   // Only the positive is badged. "No traffic" is the common case and marking
   // it would put a badge on most of the net, which is the same as marking
   // nothing at all.
-  const traffic = entry.traffic === "yes" ? `<span class="traffic">traffic</span>` : "";
-  row.dataset.traffic = entry.traffic || "";
+  // Clicking the badge marks the traffic passed, and clicking again puts it
+  // back: on a busy net a mis-click should cost a second click.
+  const outstanding = entry.traffic === "yes" && !entry.traffic_cleared;
+  const traffic =
+    entry.traffic === "yes"
+      ? `<span class="traffic${entry.traffic_cleared ? " cleared" : ""}"` +
+        (canAcknowledgeTraffic
+          ? ` role="button" tabindex="0" title="${entry.traffic_cleared ? "Mark as still outstanding" : "Mark this traffic as passed"}"`
+          : "") +
+        `>${entry.traffic_cleared ? "passed" : "traffic"}</span>`
+      : "";
+  row.dataset.traffic = outstanding ? "yes" : "";
   row.innerHTML =
     `<td class="time">${fmtTime(entry.timestamp)}${src}${late}</td>` +
     `<td class="call" title="Click to set the callsign">${callsignCellHTML(entry)}</td>` +
@@ -211,6 +222,17 @@ function paintRow(row, entry) {
   // Transcript text is model output, so it is appended as text, never markup.
   row.querySelector(".text").appendChild(document.createTextNode(entry.raw_text));
   row.querySelector(".call").onclick = () => openCorrection(row, entry);
+  const trafficBadge = row.querySelector(".traffic");
+  if (trafficBadge && canAcknowledgeTraffic) {
+    const toggle = (event) => {
+      event.stopPropagation();
+      setTrafficCleared(entry.id, !entry.traffic_cleared);
+    };
+    trafficBadge.onclick = toggle;
+    trafficBadge.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") toggle(e);
+    };
+  }
   const suggestion = row.querySelector(".suggestion");
   if (suggestion) {
     suggestion.onclick = (event) => {
@@ -229,9 +251,6 @@ function paintRow(row, entry) {
 
 function addEntry(entry, isNew) {
   entries.push(entry);
-  if (entry.traffic === "yes" && entry.matched_callsign) {
-    holdingTraffic.add(entry.matched_callsign);
-  }
   if (entry.matched) {
     counts.set(entry.matched_callsign, (counts.get(entry.matched_callsign) || 0) + 1);
   }
@@ -321,6 +340,27 @@ async function submitCorrection(entryId, callsign) {
   }
 }
 
+async function setTrafficCleared(entryId, cleared) {
+  try {
+    const res = await fetch("/api/traffic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entry_id: entryId, cleared }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "could not update");
+    applyCorrection(data.entry);
+    const left = (data.outstanding || []).length;
+    showToast(
+      cleared
+        ? `Traffic passed — ${left || "no"} station${left === 1 ? "" : "s"} outstanding`
+        : "Traffic put back as outstanding"
+    );
+  } catch (err) {
+    showToast(`Could not update traffic: ${err.message}`);
+  }
+}
+
 /* Applied both to our own corrections and to ones broadcast from another
    dashboard, so two operators never see different logs. */
 function applyCorrection(updated) {
@@ -334,6 +374,7 @@ function applyCorrection(updated) {
 
   const row = rows.get(updated.id);
   if (row) paintRow(row, updated);
+  applyFilters();
   updateStats();
   renderRoster();
 }
@@ -434,7 +475,17 @@ function showToast(message) {
   toastTimer = setTimeout(() => (toast.hidden = true), 4000);
 }
 
+function refreshHoldingTraffic() {
+  holdingTraffic.clear();
+  for (const entry of entries) {
+    if (entry.traffic === "yes" && !entry.traffic_cleared && entry.matched_callsign) {
+      holdingTraffic.add(entry.matched_callsign);
+    }
+  }
+}
+
 function updateStats() {
+  refreshHoldingTraffic();
   const shown =
     sources.length > 1 && activeTab && activeTab !== ALL
       ? entries.filter((e) => e.source === activeTab)
@@ -443,7 +494,8 @@ function updateStats() {
   const scope =
     sources.length > 1 && activeTab && activeTab !== ALL ? ` on ${activeTab}` : "";
   const holding = new Set(
-    shown.filter((e) => e.traffic === "yes" && e.matched_callsign)
+    shown
+      .filter((e) => e.traffic === "yes" && !e.traffic_cleared && e.matched_callsign)
       .map((e) => e.matched_callsign)
   );
   stats.textContent =
@@ -484,6 +536,7 @@ async function loadHistory() {
   const data = await res.json();
   roster = data.roster;
   sources = data.sources || [];
+  canAcknowledgeTraffic = data.acknowledge_traffic !== false;
   if (entries.length === 0) {
     for (const entry of data.entries) addEntry(entry, false);
   }

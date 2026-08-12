@@ -62,6 +62,10 @@ class TranscriptEntry:
     """"yes" if this transmission declared traffic, "no" if it explicitly had
     none, empty if it did not say -- three states, because "nothing to pass"
     and "did not mention it" are different facts."""
+    traffic_cleared: bool = False
+    """The operator has passed this traffic. Kept separate from `traffic` so
+    the log still records that it was declared -- what was handled is part of
+    the account of the net, not something to erase."""
     suggested_callsign: str | None = None
     """Whose voice this sounds like. A suggestion for the operator, never an
     assignment -- see voice_id.py."""
@@ -130,7 +134,7 @@ class TranscriptStore:
         """
         by_id: dict[int, dict] = {}
         for record in records:
-            if record.get("type") not in ("entry", "correction"):
+            if record.get("type") not in ("entry", "correction", "traffic"):
                 continue
             entry_id = int(record.get("id", 0))
             if entry_id:
@@ -229,16 +233,30 @@ class TranscriptStore:
         return seen
 
     def holding_traffic(self) -> list[str]:
-        """Stations that declared traffic, in the order they first did."""
+        """Stations with traffic still outstanding, oldest first.
+
+        A working list: once the operator clears a line it drops off, which is
+        what makes this different from a tally of who mentioned traffic.
+        """
         seen: list[str] = []
         for entry in self.entries:
             if (
                 entry.traffic == "yes"
+                and not entry.traffic_cleared
                 and entry.matched
                 and entry.matched_callsign not in seen
             ):
                 seen.append(entry.matched_callsign)  # type: ignore[arg-type]
         return seen
+
+    def set_traffic_cleared(self, entry_id: int, cleared: bool) -> TranscriptEntry | None:
+        """Mark traffic as passed, or put it back. Both directions on purpose:
+        a mis-click during a busy net should not need a restart to undo."""
+        entry = self.get(entry_id)
+        if entry is None or entry.traffic != "yes":
+            return None
+        entry.traffic_cleared = cleared
+        return entry
 
     # -- export ------------------------------------------------------------
 
@@ -274,12 +292,23 @@ class TranscriptStore:
             where = f" ({entry.source})" if multi and entry.source else ""
             # Traffic is marked, not spelled out: somebody scanning the log
             # afterwards for what still needs passing can find it.
-            flag = " [TRAFFIC]" if entry.traffic == "yes" else ""
+            flag = ""
+            if entry.traffic == "yes":
+                flag = " [TRAFFIC PASSED]" if entry.traffic_cleared else " [TRAFFIC]"
             lines.append(f"[{entry.timestamp}]{where} {who}:{flag} {entry.raw_text}")
         lines += ["", "Check-ins: " + ", ".join(self.check_ins())]
         holding = self.holding_traffic()
         if holding:
-            lines.append("Declared traffic: " + ", ".join(holding))
+            lines.append("Traffic outstanding: " + ", ".join(holding))
+        passed = sorted(
+            {
+                e.matched_callsign
+                for e in self.entries
+                if e.traffic == "yes" and e.traffic_cleared and e.matched_callsign
+            }
+        )
+        if passed:
+            lines.append("Traffic passed: " + ", ".join(passed))
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 

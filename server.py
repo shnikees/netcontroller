@@ -42,6 +42,11 @@ class CorrectionRequest(BaseModel):
     callsign: str
 
 
+class TrafficRequest(BaseModel):
+    entry_id: int
+    cleared: bool = True
+
+
 class Broadcaster:
     """Fan-out of new transcript entries to every connected dashboard."""
 
@@ -79,6 +84,7 @@ def create_app(
     health: HealthFleet | None = None,
     sources: list[str] | None = None,
     session: SessionWriter | None = None,
+    acknowledge_traffic: bool = True,
 ) -> FastAPI:
     app = FastAPI(title="Ham Net STT")
     by_callsign = {e.callsign: e for e in roster}
@@ -109,6 +115,7 @@ def create_app(
                 ],
                 "check_ins": store.check_ins(),
                 "holding_traffic": store.holding_traffic(),
+                "acknowledge_traffic": acknowledge_traffic,
                 "sources": sources or [],
             }
         )
@@ -180,6 +187,34 @@ def create_app(
                 "alias": candidate,
                 "voice_learned": voice_learned,
             }
+        )
+
+    @app.post("/api/traffic")
+    async def traffic(payload: TrafficRequest) -> JSONResponse:
+        """Mark traffic passed, or put it back.
+
+        A toggle rather than a one-way action: on a busy net a mis-click should
+        cost a second click, not a restart. The declaration itself is never
+        erased -- what was handled is part of the account of the net.
+        """
+        if not acknowledge_traffic:
+            return JSONResponse({"error": "traffic acknowledgement is off"}, status_code=403)
+
+        entry = store.set_traffic_cleared(payload.entry_id, payload.cleared)
+        if entry is None:
+            return JSONResponse(
+                {"error": f"No traffic on entry {payload.entry_id}"}, status_code=404
+            )
+        if session is not None:
+            session.record_traffic(entry)
+        log.info(
+            "Traffic on entry %d marked %s",
+            payload.entry_id,
+            "passed" if payload.cleared else "outstanding",
+        )
+        await broadcaster.broadcast({"type": "correction", "entry": entry.to_dict()})
+        return JSONResponse(
+            {"entry": entry.to_dict(), "outstanding": store.holding_traffic()}
         )
 
     @app.get("/api/health")

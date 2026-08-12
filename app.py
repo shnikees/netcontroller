@@ -770,7 +770,11 @@ class Pipeline:
             matched_callsign=result.callsign,
             operator_name=result.name,
             position=result.position,
-            traffic=traffic_detector.detect(segment.text),
+            traffic=(
+                traffic_detector.detect(segment.text)
+                if self.config.traffic.detect
+                else ""
+            ),
             raw_text=segment.text,
             confidence=transcription.confidence,
             match_score=result.score,
@@ -968,6 +972,7 @@ async def run(
         health=fleet,
         sources=[s.name for s in audio_sources(config)],
         session=session,
+        acknowledge_traffic=config.traffic.detect and config.traffic.acknowledge,
     )
 
     pipeline = Pipeline(

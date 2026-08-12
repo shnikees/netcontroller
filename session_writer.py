@@ -121,6 +121,11 @@ class SessionWriter:
         self.entries_written += 1
         self._rewrite_text()
 
+    def record_traffic(self, entry) -> None:
+        """Record that traffic was passed, or un-passed."""
+        self._write_line({"type": "traffic", **entry.to_dict()})
+        self._rewrite_text()
+
     def record_correction(self, entry) -> None:
         """Record an operator correction as its own line.
 

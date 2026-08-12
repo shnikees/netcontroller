@@ -104,3 +104,81 @@ def test_traffic_as_a_plain_noun_is_not_a_declaration() -> None:
 def test_punctuation_and_case_do_not_matter() -> None:
     assert detect("W6ABC -- NO TRAFFIC.") == NONE
     assert detect("With Traffic!") == HAS
+
+
+# --------------------------------------------------------------------------
+# Clearing traffic once it has been passed
+#
+# What turns a tally into a working list. The declaration is never erased --
+# what was handled is part of the account of the net.
+# --------------------------------------------------------------------------
+
+
+from datetime import datetime  # noqa: E402
+
+from transcript_store import TranscriptStore  # noqa: E402
+
+
+def line(store: TranscriptStore, callsign: str, text: str, traffic_state: str = HAS):
+    return store.add(
+        started_at=datetime(2026, 4, 1, 19, 0, 0),
+        matched=True,
+        matched_callsign=callsign,
+        operator_name="Bob",
+        raw_text=text,
+        confidence=0.9,
+        match_score=100.0,
+        clip_duration=3.0,
+        traffic=traffic_state,
+    )
+
+
+def test_clearing_removes_a_station_from_the_outstanding_list() -> None:
+    store = TranscriptStore()
+    entry = line(store, "K7XYZ", "with traffic for net control")
+    assert store.holding_traffic() == ["K7XYZ"]
+
+    store.set_traffic_cleared(entry.id, True)
+    assert store.holding_traffic() == []
+
+
+def test_clearing_is_a_toggle() -> None:
+    # A mis-click during a busy net should cost a second click.
+    store = TranscriptStore()
+    entry = line(store, "K7XYZ", "with traffic")
+    store.set_traffic_cleared(entry.id, True)
+    store.set_traffic_cleared(entry.id, False)
+    assert store.holding_traffic() == ["K7XYZ"]
+
+
+def test_the_declaration_survives_being_cleared() -> None:
+    store = TranscriptStore()
+    entry = line(store, "K7XYZ", "with traffic")
+    store.set_traffic_cleared(entry.id, True)
+    # Still on the record as having declared it, just not outstanding.
+    assert entry.traffic == HAS
+    assert entry.traffic_cleared is True
+
+
+def test_a_line_without_traffic_cannot_be_cleared() -> None:
+    store = TranscriptStore()
+    entry = line(store, "W6ABC", "no traffic", traffic_state=NONE)
+    assert store.set_traffic_cleared(entry.id, True) is None
+
+
+def test_clearing_a_missing_line_is_not_an_error() -> None:
+    assert TranscriptStore().set_traffic_cleared(99, True) is None
+
+
+def test_the_exported_log_separates_outstanding_from_passed() -> None:
+    from pathlib import Path as _Path
+
+    store = TranscriptStore()
+    passed = line(store, "K7XYZ", "with traffic for net control")
+    line(store, "KD9MNO", "I have traffic for the EOC")
+    store.set_traffic_cleared(passed.id, True)
+
+    text = store.export_text(_Path("/tmp") / "traffic-log.txt").read_text()
+    assert "Traffic outstanding: KD9MNO" in text
+    assert "Traffic passed: K7XYZ" in text
+    assert "[TRAFFIC PASSED]" in text

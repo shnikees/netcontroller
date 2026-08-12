@@ -129,6 +129,52 @@ def test_aliases_endpoint_reports_what_was_learned(context) -> None:
     assert client.get("/api/aliases").json()["aliases"] == {"E3Z": "K7XYZ"}
 
 
+def traffic_entry(store):
+    return store.add(
+        started_at=datetime(2026, 4, 1, 19, 0, 0),
+        matched=True,
+        matched_callsign="W6ABC",
+        operator_name="Alice",
+        raw_text="checking in with traffic for net control",
+        confidence=0.9,
+        match_score=100.0,
+        clip_duration=3.0,
+        traffic="yes",
+    )
+
+
+def test_traffic_can_be_marked_passed_and_put_back(context) -> None:
+    client, store, _, _ = context
+    entry = traffic_entry(store)
+    assert store.holding_traffic() == ["W6ABC"]
+
+    body = client.post("/api/traffic", json={"entry_id": entry.id, "cleared": True}).json()
+    assert body["entry"]["traffic_cleared"] is True
+    assert body["outstanding"] == []
+
+    # And back again: a mis-click costs a second click, not a restart.
+    body = client.post("/api/traffic", json={"entry_id": entry.id, "cleared": False}).json()
+    assert body["outstanding"] == ["W6ABC"]
+
+
+def test_clearing_a_line_without_traffic_404s(context) -> None:
+    client, *_ = context
+    assert client.post("/api/traffic", json={"entry_id": 1, "cleared": True}).status_code == 404
+
+
+def test_acknowledgement_can_be_switched_off(tmp_path) -> None:
+    store = TranscriptStore()
+    entry = traffic_entry(store)
+    app = create_app(
+        store, ROSTER, Broadcaster(), export_dir=str(tmp_path), acknowledge_traffic=False
+    )
+    client = TestClient(app)
+
+    assert client.post("/api/traffic", json={"entry_id": entry.id, "cleared": True}).status_code == 403
+    # And the dashboard is told, so it does not offer a control that will fail.
+    assert client.get("/api/history").json()["acknowledge_traffic"] is False
+
+
 def test_export_writes_files(context, tmp_path) -> None:
     client, *_ = context
     body = client.post("/api/export").json()

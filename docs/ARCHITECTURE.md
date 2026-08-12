@@ -228,6 +228,11 @@ within one session. Negation is checked first, questions ("any traffic for the
 net?") are treated as soliciting rather than declaring, and ambiguity resolves
 to "did not say" — a badge nobody trusts is worse than no badge.
 
+Clearing is separate from declaring, and kept on its own field. A cleared line
+still records that traffic was declared: what was handled is part of the
+account of the net, not something to erase. The clear is a toggle in both
+directions because a mis-click on a busy net should cost a second click.
+
 ### `feedback.py`
 
 The learning loop, such as it is. An operator correction does three things: fix

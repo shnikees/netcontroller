@@ -257,7 +257,7 @@ def load_entries(directory: str | Path) -> list[dict]:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue  # a truncated final line from a power cut
-            if record.get("type") not in ("entry", "correction"):
+            if record.get("type") not in ("entry", "correction", "traffic"):
                 continue
             key = (path.name, int(record.get("id", 0)))
             by_id[key] = record  # a later correction replaces the entry

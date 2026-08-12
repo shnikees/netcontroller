@@ -212,6 +212,21 @@ class VoiceConfig:
 
 
 @dataclass
+class TrafficConfig:
+    """Reading traffic declarations off the transcript, and clearing them."""
+
+    detect: bool = True
+    """Mark lines that declared traffic. Off for a net that does not work
+    that way -- a badge nobody uses is clutter on every line."""
+    acknowledge: bool = True
+    """Let the operator clear traffic once it has been passed, so the list is
+    a working one that empties rather than a tally that only grows.
+
+    The clear is itself a toggle: mis-clicks happen mid-net, and the record of
+    the declaration is kept either way."""
+
+
+@dataclass
 class RosterConfig:
     path: str = "roster.csv"
     threshold: float = 78.0
@@ -293,6 +308,7 @@ class Config:
     split: SplitConfig = field(default_factory=SplitConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
+    traffic: TrafficConfig = field(default_factory=TrafficConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     roster: RosterConfig = field(default_factory=RosterConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
@@ -340,6 +356,7 @@ _SECTIONS = {
     "split": SplitConfig,
     "whisper": WhisperConfig,
     "escalation": EscalationConfig,
+    "traffic": TrafficConfig,
     "voice": VoiceConfig,
     "roster": RosterConfig,
     "server": ServerConfig,

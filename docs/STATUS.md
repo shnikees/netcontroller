@@ -42,7 +42,7 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 300 offline tests. Segmentation, transcription, callsign matching,
+audio, with 309 offline tests. Segmentation, transcription, callsign matching,
 splitting a clip that caught two stations, corrections and alias learning,
 voice suggestions, multi-source capture, buffering and disk spill, live
 transcript writing, the watchdog, export, and the container image.
@@ -211,9 +211,9 @@ features:
   serialise. This is deliberate: two models on a Pi would thrash.
 - A clip is matched to one callsign per transmission; the splitter handles two
   stations, but a single transmission naming several stations logs once.
-- Traffic is detected, not tracked: the app records that a station declared
-  traffic, but has no notion of it being passed or cleared. "Who still has
-  traffic" is really "who declared traffic at some point tonight".
+- Traffic detection reads declarations off the transcript; whether it was
+  *passed* is the operator's click, not something the app infers from later
+  transmissions.
 - Voice suggestions need enrolment, so the first net of a new roster offers
   none.
 - Transcription is voice only — no CW, no digital modes.

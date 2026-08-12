@@ -167,6 +167,19 @@ voice:
   audio_per_station: 6
   audio_max_seconds: 5.0
 
+# Reading traffic declarations off the transcript. A net exists partly to move
+# traffic, and "who still has something to pass" is otherwise a list somebody
+# keeps in their head.
+traffic:
+  # Mark lines that declared traffic. Turn off for a net that does not work
+  # that way -- a badge nobody uses is clutter on every line.
+  detect: true
+  # Let the operator clear traffic once it has been passed, by clicking the
+  # badge, so the list empties instead of only growing. The clear is itself a
+  # toggle: a mis-click costs a second click, and the log still records that
+  # the traffic was declared.
+  acknowledge: true
+
 roster:
   path: roster.csv
   # Minimum fuzzy score (0-100) to accept a match. 78 sits just under the 80
