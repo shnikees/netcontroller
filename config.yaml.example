@@ -103,6 +103,26 @@ health:
   restart_delay_s: 2.0
   restart_max_delay_s: 30.0
 
+# Slack for when transcription cannot keep up with the net. The design rule:
+# a slow machine makes transcripts arrive LATE, never makes them MISSING.
+buffering:
+  # Pre-allocated audio buffer between the sound card and the VAD, in seconds.
+  # Allocated once at startup, so the audio callback never grows the heap.
+  ring_seconds: 30.0
+  # Clips held in memory waiting for Whisper. Past this they go to disk.
+  clip_queue_max: 32
+  # Write the overflow to disk instead of dropping it. Turning this off means
+  # audio is lost when the transcriber falls behind -- the counter still tells
+  # you it happened, but the audio is gone.
+  spill_enabled: true
+  spill_dir: spill
+  # Ceiling on the disk backlog. Past it the oldest spilled clip is dropped,
+  # which is the signal that this hardware will never catch up on this model.
+  spill_max_clips: 500
+  # How long to keep transcribing the backlog after Ctrl-C, so late clips
+  # still make the exported log.
+  drain_timeout_s: 30.0
+
 logging:
   # Rotating file log, kept alongside the console. Set null for console only.
   dir: logs

@@ -271,6 +271,13 @@ Heartbeat: ok | up 12m | 24000 frames, 18 clips, 18 transcripts | level 412 RMS 
 **503** when the pipeline is in error, so a container healthcheck or a one-line
 `curl -f` in cron can act on it.
 
+**Keeping up** — transcription runs on its own thread, so a slow machine never
+costs you audio. Clips queue in memory; if that fills, they spill to disk and
+are transcribed during the next lull or after the net. Those lines are marked
+**late** on the dashboard but sit in their correct place in the log, so the
+exported net report still reads in transmission order. If clips are spilling
+every net, the model is a size too big for the hardware and the banner says so.
+
 **Recovery** — if the audio device drops (a USB SDR replugged mid-net), capture
 reopens automatically with exponential backoff, so it costs seconds rather
 than the rest of the net. For an unattended install, `deploy/net-stt.service`
@@ -299,7 +306,7 @@ The page reconnects on its own if the app restarts.
 .venv/bin/python -m pytest
 ```
 
-131 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+156 tests, all offline, no audio hardware needed. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 

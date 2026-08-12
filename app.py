@@ -19,10 +19,17 @@
     python app.py --list-devices
     python app.py --file recorded-net.wav      # offline replay, no SDR needed
 
-The audio -> VAD -> STT chain runs on a worker thread; finished entries are
-handed to the asyncio loop, which broadcasts them to the dashboard. Keeping the
-blocking work off the loop is what stops a slow transcription from stalling the
-websocket.
+Three threads, deliberately:
+
+    PortAudio callback  -> ring buffer        (never allocates, never blocks)
+    capture thread      -> VAD -> clip queue  (cheap; always keeps up)
+    STT thread          -> Whisper -> store   (slow; allowed to fall behind)
+
+The split is what keeps audio from being lost on a slow box. With VAD and
+Whisper on one thread, nothing drained the audio buffer during a transcription,
+so a long clip on a Pi meant the *next* transmission was dropped mid-word.
+Now a slow transcriber makes transcripts arrive late -- and if even the clip
+queue fills, clips spill to disk rather than being discarded.
 """
 
 from __future__ import annotations
@@ -30,17 +37,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import queue
 import signal
 import sys
 import threading
 import time
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from pathlib import Path
 
 import uvicorn
 
 from audio_capture import TARGET_RATE, AudioCapture, list_devices
 from callsign_match import CallsignMatcher, load_roster
+from clip_spill import SpillStore
 from config import Config, load_config
 from feedback import FeedbackLog
 from health import ERROR, OK, WARNING, HealthMonitor
@@ -80,7 +90,17 @@ class Pipeline:
         self.wav_path = wav_path
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._stt_thread: threading.Thread | None = None
         self._capture: AudioCapture | None = None
+        self._sequence = 0
+        self._session_start = datetime.now()
+
+        # Bounded on purpose. Past this depth the backlog goes to disk, where it
+        # is not competing for memory on a 2 GB Pi.
+        self._clips: queue.Queue = queue.Queue(maxsize=config.buffering.clip_queue_max)
+        self.spill = SpillStore(
+            config.buffering.spill_dir, max_clips=config.buffering.spill_max_clips
+        )
 
         self.stt = SttWorker(
             model_size=config.whisper.model_size,
@@ -104,6 +124,14 @@ class Pipeline:
 
     def start(self) -> None:
         self.stt.load()
+        if self.config.buffering.spill_enabled:
+            cleared = self.spill.clear()
+            if cleared:
+                log.info("Cleared %d clip(s) left over from a previous run", cleared)
+        self._stt_thread = threading.Thread(
+            target=self._transcribe_loop, name="stt", daemon=True
+        )
+        self._stt_thread.start()
         self._thread = threading.Thread(target=self._run, name="capture", daemon=True)
         self._thread.start()
 
@@ -111,8 +139,20 @@ class Pipeline:
         self._stop.set()
         if self._capture is not None:
             self._capture.stop()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
+        self._clips.put(None)  # release the STT thread from its wait
+        for thread in (self._thread, self._stt_thread):
+            if thread is not None:
+                thread.join(timeout=5)
+
+    def drain(self, timeout: float = 30.0) -> int:
+        """Wait for the backlog to finish. Used at shutdown so a spilled clip
+        still makes it into the exported log."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._clips.empty() and self.spill.pending() == 0:
+                return 0
+            time.sleep(0.2)
+        return self._clips.qsize() + self.spill.pending()
 
     # -- worker thread -----------------------------------------------------
 
@@ -124,7 +164,7 @@ class Pipeline:
         of it. File replay never restarts: reaching the end is success, and
         retrying would loop the recording forever.
         """
-        session_start = datetime.now()
+        session_start = self._session_start
         delay = self.config.health.restart_delay_s
 
         while not self._stop.is_set():
@@ -137,10 +177,11 @@ class Pipeline:
                 for clip in self.segmenter.segment(self._watch(frames)):
                     if self._stop.is_set():
                         break
-                    self._handle_clip(clip, session_start)
-                self.health.capture_stopped()
+                    self._enqueue(clip)
                 if self.wav_path or self._stop.is_set():
+                    self.health.capture_finished()
                     return
+                self.health.capture_stopped()
                 log.warning("Audio stream ended unexpectedly")
             except AudioUnavailable as exc:
                 # The dashboard stays up so the operator can read the error and
@@ -176,6 +217,7 @@ class Pipeline:
             self.health.note_frame(rms)
             if self._capture is not None and index % 100 == 0:
                 self.health.note_overflows(self._capture.overflows)
+                self.health.note_spill(self.spill.spilled, self.spill.pending())
             yield frame
 
     def _close_capture(self) -> None:
@@ -193,6 +235,7 @@ class Pipeline:
                 frame_ms=self.config.audio.frame_ms,
                 channel=self.config.audio.channel,
                 gain=self.config.audio.gain,
+                buffer_seconds=self.config.buffering.ring_seconds,
             )
             self._capture.start()
         except Exception as exc:
@@ -254,7 +297,74 @@ class Pipeline:
                 if finished:
                     return
 
-    def _handle_clip(self, clip, session_start: datetime) -> None:
+    # -- clip queue, spill, and transcription ------------------------------
+
+    def _enqueue(self, clip) -> None:
+        """Hand a clip to the STT thread, spilling to disk if it is behind."""
+        self._sequence += 1
+        clip.sequence = self._sequence
+        try:
+            self._clips.put_nowait(clip)
+            return
+        except queue.Full:
+            pass
+
+        if not self.config.buffering.spill_enabled:
+            self.health.note_error("clip dropped: transcriber is too far behind")
+            log.error(
+                "Clip queue full and spilling disabled -- dropped %.1fs of audio",
+                clip.duration_ms / 1000,
+            )
+            return
+
+        path = self.spill.write(
+            clip.audio, clip.start_offset_ms, clip.duration_ms, self._sequence
+        )
+        if path is None:
+            self.health.note_error("clip lost: could not spill to disk")
+            return
+        self.health.note_spill(self.spill.spilled, self.spill.pending())
+        log.warning(
+            "Transcriber is behind; spilled clip %d (%.1fs) to %s",
+            self._sequence,
+            clip.duration_ms / 1000,
+            path.name,
+        )
+
+    def _transcribe_loop(self) -> None:
+        """Drain the clip queue, then any spilled backlog, forever.
+
+        Live clips come first: during a net, the line that matters is the one
+        being spoken now. Spilled clips are picked up whenever the queue runs
+        dry -- a lull between check-ins, or after the net ends.
+        """
+        while not self._stop.is_set():
+            try:
+                clip = self._clips.get(timeout=0.5)
+            except queue.Empty:
+                self._drain_one_spilled()
+                continue
+            if clip is None:
+                return
+            self._handle_clip(clip, self._session_start, late=False)
+
+    def _drain_one_spilled(self) -> None:
+        if not self.config.buffering.spill_enabled:
+            return
+        spilled = self.spill.read_oldest()
+        if spilled is None:
+            return
+        clip = SimpleNamespace(
+            audio=spilled.audio,
+            start_offset_ms=spilled.start_offset_ms,
+            duration_ms=spilled.duration_ms,
+            sequence=spilled.sequence,
+        )
+        log.info("Catching up: transcribing spilled clip %d", spilled.sequence)
+        self._handle_clip(clip, self._session_start, late=True)
+        self.health.note_spill(self.spill.spilled, self.spill.pending())
+
+    def _handle_clip(self, clip, session_start: datetime, late: bool = False) -> None:
         started_at = session_start + timedelta(milliseconds=clip.start_offset_ms)
         self.health.note_clip()
         began = time.monotonic()
@@ -265,7 +375,7 @@ class Pipeline:
             self.health.note_error(f"transcription failed: {exc}")
             log.exception("Transcription failed for %.1fs clip", clip.duration_ms / 1000)
             return
-        self.health.note_transcription(time.monotonic() - began)
+        self.health.note_transcription(time.monotonic() - began, self._clips.qsize())
         if not transcription.text:
             log.debug("Empty transcription for %.1fs clip", clip.duration_ms / 1000)
             return
@@ -283,12 +393,14 @@ class Pipeline:
             candidate=result.candidate,
             unmatched_reason=result.reason,
             via_alias=result.via_alias,
+            late=late,
         )
         log.info(
-            "%s | %s | %s",
+            "%s | %s | %s%s",
             entry.timestamp,
             entry.matched_callsign or f"unmatched({entry.candidate or '-'})",
             entry.raw_text,
+            " [late]" if late else "",
         )
         asyncio.run_coroutine_threadsafe(
             self.broadcaster.broadcast({"type": "entry", "entry": entry.to_dict()}),
@@ -331,7 +443,8 @@ async def watchdog(
             last_heartbeat = now
             log.info(
                 "Heartbeat: %s | up %.0fm | %d frames, %d clips, %d transcripts "
-                "| level %.0f RMS | last transcribe %.2fs | %d dropped",
+                "| level %.0f RMS | last transcribe %.2fs | backlog %d"
+                "%s | %d dropped",
                 snapshot.state,
                 snapshot.uptime_s / 60,
                 snapshot.frames,
@@ -339,6 +452,8 @@ async def watchdog(
                 snapshot.transcriptions,
                 snapshot.signal_rms,
                 snapshot.last_transcribe_s,
+                snapshot.backlog,
+                f" (+{snapshot.spill_pending} on disk)" if snapshot.spill_pending else "",
                 snapshot.overflows,
             )
 
@@ -433,6 +548,13 @@ async def run(config: Config, wav_path: str | None) -> None:
         await server.serve()
     finally:
         watch.cancel()
+        remaining = pipeline.drain(timeout=config.buffering.drain_timeout_s)
+        if remaining:
+            log.warning(
+                "Shutting down with %d clip(s) still untranscribed; they stay in %s",
+                remaining,
+                config.buffering.spill_dir,
+            )
         pipeline.stop()
         if store.entries:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")

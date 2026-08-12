@@ -36,13 +36,13 @@ Run `python app.py --list-devices` to see what the host offers.
 from __future__ import annotations
 
 import logging
-import queue
 from dataclasses import dataclass, field
 
 import numpy as np
 import sounddevice as sd
 
 from resample import Resampler, describe
+from ring_buffer import RingBuffer
 
 log = logging.getLogger(__name__)
 
@@ -128,7 +128,9 @@ class AudioCapture:
     frame_ms: int = 30
     channel: str | int = "mix"
     gain: float = 1.0
-    queue_maxsize: int = 200
+    buffer_seconds: float = 30.0
+    """Depth of the pre-allocated ring buffer. This is the slack the pipeline
+    has when transcription falls behind; 30 s covers a long over on a slow box."""
     _resampler: Resampler = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -144,10 +146,10 @@ class AudioCapture:
         self._rate = self._pick_samplerate()
         self._resampler = Resampler(self._rate, TARGET_RATE)
 
-        self._frame_bytes = int(TARGET_RATE * self.frame_ms / 1000) * 2
+        self._frame_samples = int(TARGET_RATE * self.frame_ms / 1000)
         self._block = int(self._rate * self.frame_ms / 1000)
-        self._buffer = bytearray()
-        self._queue: queue.Queue[bytes | None] = queue.Queue(maxsize=self.queue_maxsize)
+        # Allocated once, up front: the audio callback never grows the heap.
+        self._ring = RingBuffer(int(TARGET_RATE * self.buffer_seconds))
         self._stream: sd.InputStream | None = None
         self.overflows = 0
         self.clipped = 0
@@ -252,19 +254,11 @@ class AudioCapture:
         if len(resampled) == 0:
             return
 
-        # Resampling does not return a whole number of VAD frames, so buffer and
-        # emit exact-length frames; webrtcvad rejects anything else.
-        self._buffer.extend(resampled.tobytes())
-        while len(self._buffer) >= self._frame_bytes:
-            frame = bytes(self._buffer[: self._frame_bytes])
-            del self._buffer[: self._frame_bytes]
-            try:
-                self._queue.put_nowait(frame)
-            except queue.Full:
-                # Dropping is the right failure mode: the STT worker fell behind
-                # and we would rather lose a frame than grow an unbounded
-                # backlog that puts the dashboard minutes behind the net.
-                self.overflows += 1
+        # Straight into pre-allocated storage. Re-chunking into exact VAD frames
+        # happens on the reader side, where an allocation costs nothing.
+        dropped = self._ring.write(resampled)
+        if dropped:
+            self.overflows += 1
 
     def start(self) -> None:
         self._stream = sd.InputStream(
@@ -282,12 +276,21 @@ class AudioCapture:
             self._stream.stop()
             self._stream.close()
             self._stream = None
-        self._queue.put(None)
+        self._ring.close()
+
+    @property
+    def backlog(self) -> float:
+        """How full the ring buffer is, 0.0-1.0."""
+        return self._ring.fill
+
+    @property
+    def dropped_samples(self) -> int:
+        return self._ring.dropped
 
     def frames(self):
         """Blocking iterator of 16 kHz int16 frames, ending when stop() is called."""
         while True:
-            frame = self._queue.get()
-            if frame is None:
+            samples = self._ring.read(self._frame_samples)
+            if samples is None:
                 return
-            yield frame
+            yield samples.tobytes()

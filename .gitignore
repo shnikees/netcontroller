@@ -9,3 +9,5 @@ net-log-*.txt
 net-log-*.json
 *.wav
 .pytest_cache/
+logs/
+spill/

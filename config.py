@@ -115,6 +115,23 @@ class HealthConfig:
 
 
 @dataclass
+class BufferingConfig:
+    """How much slack the pipeline has when transcription falls behind."""
+
+    ring_seconds: float = 30.0
+    """Pre-allocated audio buffer between the device and the VAD."""
+    clip_queue_max: int = 32
+    """Clips held in memory waiting for Whisper. Past this they go to disk."""
+    spill_enabled: bool = True
+    """Write the overflow to disk instead of dropping it."""
+    spill_dir: str = "spill"
+    spill_max_clips: int = 500
+    """Ceiling on the disk backlog; past it the oldest spilled clip is dropped."""
+    drain_timeout_s: float = 30.0
+    """How long to keep transcribing the backlog at shutdown."""
+
+
+@dataclass
 class LoggingConfig:
     dir: str | None = "logs"
     """Set null to disable file logging and use the console only."""
@@ -132,6 +149,7 @@ class Config:
     roster: RosterConfig = field(default_factory=RosterConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
+    buffering: BufferingConfig = field(default_factory=BufferingConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     export_dir: str = "."
 
@@ -155,6 +173,7 @@ _SECTIONS = {
     "roster": RosterConfig,
     "server": ServerConfig,
     "health": HealthConfig,
+    "buffering": BufferingConfig,
     "logging": LoggingConfig,
 }
 

@@ -77,6 +77,12 @@ class Health:
     seconds_since_clip: float | None
     last_transcribe_s: float
     """How long the last transcription took; a proxy for keeping up."""
+    backlog: int
+    """Clips waiting in memory for the transcriber."""
+    spilled: int
+    """Clips written to disk this session because the queue was full."""
+    spill_pending: int
+    """Spilled clips still waiting to be transcribed."""
     last_error: str
 
     def to_dict(self) -> dict:
@@ -102,6 +108,9 @@ class Health:
                 else round(self.seconds_since_clip, 1)
             ),
             "last_transcribe_s": round(self.last_transcribe_s, 2),
+            "backlog": self.backlog,
+            "spilled": self.spilled,
+            "spill_pending": self.spill_pending,
             "last_error": self.last_error,
         }
 
@@ -131,6 +140,7 @@ class HealthMonitor:
         now = self.clock()
         self._started = now
         self._capturing = False
+        self._finished = False
         self._last_frame: float | None = None
         self._last_clip: float | None = None
         self._last_signal: float | None = None
@@ -141,6 +151,9 @@ class HealthMonitor:
         self._overflows = 0
         self._signal_rms = 0.0
         self._last_transcribe_s = 0.0
+        self._backlog = 0
+        self._spilled = 0
+        self._spill_pending = 0
         self._last_error = ""
 
     # -- reported by the capture thread ------------------------------------
@@ -148,6 +161,7 @@ class HealthMonitor:
     def capture_started(self) -> None:
         with self._lock:
             self._capturing = True
+            self._finished = False
             self._last_error = ""
             # Give the device a fresh grace period; otherwise a restart looks
             # stalled for as long as it takes the first frame to arrive.
@@ -157,6 +171,17 @@ class HealthMonitor:
     def capture_stopped(self) -> None:
         with self._lock:
             self._capturing = False
+
+    def capture_finished(self) -> None:
+        """Capture ended because the source ran out, not because it broke.
+
+        A finished file replay is a success; alarming about it would train the
+        operator to ignore the banner during the tuning workflow that is
+        supposed to precede going live.
+        """
+        with self._lock:
+            self._capturing = False
+            self._finished = True
 
     def capture_failed(self, message: str) -> None:
         with self._lock:
@@ -178,10 +203,16 @@ class HealthMonitor:
             self._clips += 1
             self._last_clip = self.clock()
 
-    def note_transcription(self, seconds: float) -> None:
+    def note_transcription(self, seconds: float, backlog: int = 0) -> None:
         with self._lock:
             self._transcriptions += 1
             self._last_transcribe_s = seconds
+            self._backlog = backlog
+
+    def note_spill(self, spilled: int, pending: int) -> None:
+        with self._lock:
+            self._spilled = spilled
+            self._spill_pending = pending
 
     def note_overflows(self, total: int) -> None:
         with self._lock:
@@ -204,7 +235,7 @@ class HealthMonitor:
             )
             issues: list[tuple[str, str]] = []
 
-            if not self._capturing:
+            if not self._capturing and not self._finished:
                 issues.append(
                     (
                         ERROR,
@@ -228,6 +259,16 @@ class HealthMonitor:
                         f"Audio is silent ({self._signal_rms:.0f} RMS) for "
                         f"{since_signal / 60:.0f} min -- check squelch and "
                         "the SDR app's output level",
+                    )
+                )
+
+            if self._spill_pending:
+                issues.append(
+                    (
+                        WARNING,
+                        f"Transcriber is behind: {self._spill_pending} clip(s) "
+                        "buffered to disk, catching up between transmissions "
+                        "-- a smaller Whisper model would keep up live",
                     )
                 )
 
@@ -257,5 +298,8 @@ class HealthMonitor:
                 seconds_since_frame=since_frame,
                 seconds_since_clip=since_clip,
                 last_transcribe_s=self._last_transcribe_s,
+                backlog=self._backlog,
+                spilled=self._spilled,
+                spill_pending=self._spill_pending,
                 last_error=self._last_error,
             )

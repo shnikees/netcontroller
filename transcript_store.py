@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import csv
 import json
+from bisect import bisect_right
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +49,8 @@ class TranscriptEntry:
     """What the matcher concluded before the operator corrected it."""
     via_alias: bool = False
     """True when a previously learned correction produced this match."""
+    late: bool = False
+    """Transcribed from the disk backlog, after the transmission had passed."""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -72,6 +75,7 @@ class TranscriptStore:
         candidate: str | None = None,
         unmatched_reason: str = "",
         via_alias: bool = False,
+        late: bool = False,
     ) -> TranscriptEntry:
         entry = TranscriptEntry(
             id=self._next_id,
@@ -86,9 +90,14 @@ class TranscriptStore:
             candidate=candidate,
             unmatched_reason=unmatched_reason,
             via_alias=via_alias,
+            late=late,
         )
         self._next_id += 1
-        self.entries.append(entry)
+        # Keep the log in transmission order. A clip recovered from the disk
+        # backlog arrives after later ones, but belongs where it was spoken --
+        # otherwise the exported net log reads out of sequence.
+        position = bisect_right([e.timestamp for e in self.entries], entry.timestamp)
+        self.entries.insert(position, entry)
         return entry
 
     def get(self, entry_id: int) -> TranscriptEntry | None:

@@ -36,22 +36,35 @@ static/             plain-JS dashboard, no build step
 
 ## Threading model
 
-There are exactly two threads, and the split matters:
+Four contexts, and the boundaries between them are the design:
 
-- **Main thread**: asyncio loop running uvicorn. Serves HTTP and websockets.
-- **Capture thread** (`Pipeline._run`): audio → VAD → Whisper → matcher → store.
+| Context | Work | Speed |
+| --- | --- | --- |
+| PortAudio callback | resample, write to ring buffer | real-time, never allocates |
+| Capture thread (`Pipeline._run`) | ring → frames → VAD → clip queue | cheap, always keeps up |
+| STT thread (`_transcribe_loop`) | Whisper → matcher → store | slow, allowed to fall behind |
+| Main thread | asyncio + uvicorn: HTTP, websockets, watchdog | must stay responsive |
 
-Whisper inference blocks for hundreds of milliseconds to seconds. If it ran on
-the event loop, every transcription would freeze the dashboard. Instead the
-capture thread pushes finished entries across with
-`asyncio.run_coroutine_threadsafe`, which is the only point where the two
-threads touch.
+The STT split is the one that took a bug to find. Originally VAD and Whisper
+shared a thread, so **nothing drained the audio buffer during a transcription**.
+On a Pi, a 4-second inference meant the next transmission was dropped mid-word
+— the failure was invisible, because the missing line looked like a station
+that never checked in.
 
-Backpressure is handled by dropping, not queueing: `AudioCapture` uses a bounded
-queue and discards frames when the consumer falls behind. On a machine too slow
-for the chosen model, you lose audio rather than accumulating an ever-growing
-backlog that puts the dashboard minutes behind the net. If you see
-`AudioCapture.overflows` climbing, the model is too big for the hardware.
+Now backpressure has three stages, each degrading further than the last:
+
+1. **Ring buffer** (`ring_buffer.py`, 30 s default) — pre-allocated once, so the
+   audio callback never allocates and never blocks. Overrun drops the *oldest*
+   audio, because old frames belong to a transmission that was already
+   truncated.
+2. **Clip queue** (32 clips) — finished clips waiting for Whisper.
+3. **Disk spill** (`clip_spill.py`) — past that, clips become WAVs on disk and
+   are transcribed in the next lull. Late, flagged, and in the right place in
+   the log, because `TranscriptStore` inserts by timestamp rather than arrival.
+
+The rule the whole chain enforces: **a slow machine makes transcripts late, not
+missing.** `test_pipeline.py` asserts exactly that against a transcriber
+slower than real time.
 
 ## Module notes
 

@@ -86,12 +86,16 @@ function callsignCellHTML(entry) {
 
 function paintRow(row, entry) {
   row.dataset.callsign = entry.matched_callsign || "";
+  row.dataset.timestamp = entry.timestamp;
   row.classList.toggle("unmatched", !entry.matched);
   if (filter) row.classList.toggle("dim", row.dataset.callsign !== filter);
 
   const pct = Math.round((entry.confidence || 0) * 100);
+  const late = entry.late
+    ? `<span class="late-mark" title="Transcribed from the backlog after the transmission had passed">late</span>`
+    : "";
   row.innerHTML =
-    `<td class="time">${fmtTime(entry.timestamp)}</td>` +
+    `<td class="time">${fmtTime(entry.timestamp)}${late}</td>` +
     `<td class="call" title="Click to set the callsign">${callsignCellHTML(entry)}</td>` +
     `<td class="text"></td>` +
     `<td class="conf"><span class="bar${pct < 60 ? " low" : ""}"><span style="width:${pct}%"></span></span>${pct}%</td>`;
@@ -109,9 +113,16 @@ function addEntry(entry, isNew) {
   const row = document.createElement("tr");
   if (isNew) row.classList.add("new");
   paintRow(row, entry);
-
   rows.set(entry.id, row);
-  log.appendChild(row);
+
+  // A clip recovered from the disk backlog arrives after later ones but was
+  // spoken earlier, so it goes where it belongs rather than at the bottom.
+  const after = [...log.children].find(
+    (r) => (r.dataset.timestamp || "") > entry.timestamp
+  );
+  row.dataset.timestamp = entry.timestamp;
+  if (after) log.insertBefore(row, after);
+  else log.appendChild(row);
   emptyEl.hidden = true;
   updateStats();
   renderRoster();
@@ -227,9 +238,14 @@ function renderHealth(health) {
     banner.hidden = false;
     banner.className = state;
     const label = state === "error" ? "Not logging" : "Check audio";
+    const backlog =
+      health.spill_pending > 0
+        ? `<span class="backlog">${health.spill_pending} clip(s) catching up</span>`
+        : "";
     banner.innerHTML =
       `<span class="label">${label}</span>` +
-      `<ul>${health.issues.map((i) => `<li>${escapeHTML(i)}</li>`).join("")}</ul>`;
+      `<ul>${health.issues.map((i) => `<li>${escapeHTML(i)}</li>`).join("")}</ul>` +
+      backlog;
   }
 
   // Beep only on the transition into a worse state, not every poll.
