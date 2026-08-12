@@ -13,28 +13,33 @@ locally.
 SDR / radio ──▶ loopback, line in, or mic ──▶ capture ──▶ VAD ──▶ Whisper ──▶ roster match ──▶ dashboard
 ```
 
-![The dashboard during a net: matched stations in green with operator names, an
-unmatched transmission flagged in amber showing the callsign that was heard, and
-a roster sidebar doubling as a check-in list](docs/images/dashboard.png)
+![The dashboard during a net: a tab per receiver with health dots, matched
+stations in green with operator names, an unmatched transmission flagged in
+amber showing the callsign that was heard, and a roster sidebar doubling as a
+check-in list](docs/images/dashboard.png)
 
-Matched stations show in green with the operator's name; the roster sidebar
-lights up as stations check in. The amber line is the interesting case — an
-off-roster visitor, flagged rather than force-matched to the nearest roster
-entry, with the callsign the app heard shown so net control can resolve it by
-ear. Clicking that cell sets the right station, and the app
-[learns the correction](#corrections-and-what-the-app-learns-from-them) for next
-time. (Screenshot uses the example roster and synthesized audio from
+One tab per receiver — the repeater is first, because that is the frequency
+being monitored. Matched stations show in green with the operator's name, and
+the roster sidebar lights up as stations check in. The amber line is the
+interesting case: an off-roster visitor, flagged rather than force-matched to
+the nearest roster entry, with the callsign the app actually heard. Clicking it
+sets the right station, and the app
+[learns the correction](#corrections-and-what-the-app-learns-from-them) for
+next time. (Screenshot uses the example roster and synthesised audio from
 `tools/make_test_audio.py`.)
 
 ## Status
 
-Working end to end on recorded and synthesized audio. **The live SDR capture
-path has not yet run against real hardware** — see
-[docs/FIELD-BRINGUP.md](docs/FIELD-BRINGUP.md) for the bring-up checklist and
-the list of specifically unverified pieces.
+Everything downstream of the audio device works and is tested offline:
+segmentation, transcription, callsign matching, corrections and learning, voice
+suggestions, multiple receivers, buffering, crash-safe transcripts, the
+watchdog, export, the container image.
 
-Everything downstream of the audio device — segmentation, transcription,
-callsign matching, dashboard, export, container image — is tested and works.
+**No part of it has run against a real radio yet**, and every tuning constant
+is a reasoned guess rather than a measurement. [docs/STATUS.md](docs/STATUS.md)
+is the honest account of what is proven, what is not, and what to do next;
+[docs/FIELD-BRINGUP.md](docs/FIELD-BRINGUP.md) is the checklist for the first
+session at the hardware.
 
 ## Documentation
 
@@ -45,6 +50,8 @@ callsign matching, dashboard, export, container image — is tested and works.
 - [docs/TESTING.md](docs/TESTING.md) — test suites, generating test audio
   without an SDR, and how to add a regression when a net surfaces a new
   mis-transcription
+- [docs/STATUS.md](docs/STATUS.md) — what is proven, what is guessed, and the
+  work worth doing next
 
 Deployment files live in [deploy/](deploy/) (a systemd unit) and at the repo
 root (`Containerfile`, `docker-compose.yml`).
@@ -512,7 +519,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-229 tests, all offline, no audio hardware needed. `test_callsign_match.py`
+231 tests, all offline, no audio hardware needed. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
 `test_vad_segmenter.py` pins the clip boundaries with scripted speech patterns.
 
@@ -555,6 +562,9 @@ of the SDR stack it sits alongside. If you modify it and distribute your
 version, your changes have to be available under the GPL too.
 
 ## Limitations
+
+See [docs/STATUS.md](docs/STATUS.md) for the full account, including which
+settings are still guesses. In short:
 
 - Voice only (FM/SSB). No CW, no digital modes.
 - One transmission is assumed to be one speaker, which holds for a half-duplex

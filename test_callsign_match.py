@@ -315,6 +315,23 @@ def test_load_roster_with_header(tmp_path) -> None:
     assert entries == [RosterEntry("W6ABC", "Alice"), RosterEntry("K7XYZ", "Bob")]
 
 
+def test_roster_comments_are_not_stations(tmp_path) -> None:
+    # Operators annotate rosters: a note at the top, a station commented out
+    # because they are away. Those lines must not become callsigns.
+    path = tmp_path / "roster.csv"
+    path.write_text(
+        "callsign,name\n# away this month:\n#K7XYZ,Bob\nW6ABC,Alice\n",
+        encoding="utf-8",
+    )
+    assert [e.callsign for e in load_roster(path)] == ["W6ABC"]
+
+
+def test_the_shipped_example_roster_is_clean() -> None:
+    # It is the file everyone copies; it must not teach a broken pattern.
+    for entry in load_roster("roster.example.csv"):
+        assert not entry.callsign.startswith("#")
+
+
 def test_load_roster_without_names(tmp_path) -> None:
     path = tmp_path / "roster.csv"
     path.write_text("W6ABC\nN5DEF\n", encoding="utf-8")

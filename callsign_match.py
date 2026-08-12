@@ -207,6 +207,10 @@ def load_roster(path: str | Path) -> list[RosterEntry]:
         for row in csv.reader(fh):
             if not row or not row[0].strip():
                 continue
+            # Rosters get annotated by hand -- a commented-out station, a note
+            # about who is away. Without this those lines become stations.
+            if row[0].lstrip().startswith("#"):
+                continue
             callsign = row[0].strip().upper()
             if callsign in {"CALLSIGN", "CALL", "CALL_SIGN"}:
                 continue  # header
