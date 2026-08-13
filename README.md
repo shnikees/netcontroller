@@ -80,6 +80,8 @@ session at the hardware.
   mis-transcription
 - [docs/STATUS.md](docs/STATUS.md) — what is proven, what is guessed, and the
   work worth doing next
+- [docs/HARDWARE.md](docs/HARDWARE.md) — engine and model-size benchmarks,
+  accelerator options, and whether anything needs buying (usually not)
 
 Deployment files live in [deploy/](deploy/) (a systemd unit) and at the repo
 root (`Containerfile`, `docker-compose.yml`).
@@ -357,8 +359,14 @@ hardware; this is a guide, not a benchmark.
 | --- | --- | --- | --- | --- |
 | `tiny` | ~0.2 s | ~2 s | ~1 s | Rough. Drops words when an operator rattles a callsign off quickly; leans hard on the roster to recover |
 | `base` | ~0.4 s | ~4 s | ~2 s | Good default for an unhurried net |
-| `small` | ~1.5 s | too slow | ~6 s | Where to go if transcripts are wrong on fast, run-together speech |
+| `small` | ~1.5 s | too slow | ~6 s | **Measured worse than `base`** at callsign recovery — see below |
 | `medium` | ~4 s | no | no | Best accuracy; needs a GPU to be worth it |
+
+On the synthetic test net in [docs/HARDWARE.md](docs/HARDWARE.md), `small`
+recovered fewer callsigns than `base` in every engine configuration, seemingly
+because a mid-sized model is confident enough to "correct" spelled phonetics
+into ordinary English. That is one synthetic recording rather than a verdict,
+but check it against your own audio before reaching for a bigger model.
 
 **If the problem is fast-paced traffic, model size is the main lever.** A
 station who gives their callsign as one run-on phrase is harder for a small
@@ -807,8 +815,10 @@ the network.
 
 ## What to run it on
 
-The short version, with the reasoning and specific machines in
-[docs/STATUS.md](docs/STATUS.md):
+The short version, with the benchmarks, specific machines and the buying
+argument in [docs/HARDWARE.md](docs/HARDWARE.md). **Start by assuming you need
+nothing** — on the synthetic test net `base` matches `medium` on callsign
+recovery, and runs at a fraction of realtime on an ordinary CPU.
 
 | | Runs | Notes |
 | --- | --- | --- |

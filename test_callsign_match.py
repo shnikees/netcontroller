@@ -264,6 +264,57 @@ def test_a_digit_welded_to_a_phonetic_splits() -> None:
     assert normalize("victor echo 3zulu quebec romeo") == "VE3ZQR"
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # All four verbatim from a benchmark run against base and small: the
+        # audio was fine and the transcript was readable, but the callsign was
+        # being thrown away between the two.
+        ("Kilo Delta 9er Mike November Oscar, Dave at the summit", "KD9MNO"),
+        ("Copy that, Kilo Delta 9 or Mike November Oscar rolling", "KD9MNO"),
+        ("Victor Echo III Zulu Quebec Romeo, confirming", "VE3ZQR"),
+        ("Alpha, Alpha4PQ, mile marker 12, in position", "AA4PQ"),
+    ],
+)
+def test_callsigns_lost_in_normalization_not_in_the_audio(
+    raw: str, expected: str
+) -> None:
+    matcher = CallsignMatcher(roster=ROSTER + [RosterEntry("VE3ZQR", "Frank")])
+    result = matcher.match(raw)
+    assert result.matched, f"{raw!r} -> {normalize(raw)!r} ({result.reason})"
+    assert result.callsign == expected
+
+
+def test_niner_split_across_two_words_does_not_end_the_run() -> None:
+    # The stray "or" is the back half of "niner". Treating it as filler ends the
+    # run and leaves KD9, which is rejected -- losing the station entirely.
+    assert normalize("kilo delta 9 or mike november oscar") == "KD9MNO"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "we have nine or ten people at the aid station",
+        "runner down at mile 12, requesting medical",
+        "IV started on the patient at mile 8",
+    ],
+)
+def test_the_new_splits_leave_ordinary_english_alone(raw: str) -> None:
+    """Each rule above is narrow on purpose; this is what it must not touch.
+
+    A wrong callsign puts a station at the wrong point on the course, so these
+    guards matter more than the recoveries they protect.
+    """
+    matcher = CallsignMatcher(roster=ROSTER)
+    assert not matcher.match(raw).matched, normalize(raw)
+
+
+def test_a_word_with_a_number_is_not_a_phonetic_weld() -> None:
+    # "mile12" has no phonetic in it, so it stays one token. An unconditional
+    # split on the letter/digit boundary would make a callsign-shaped "MILE".
+    assert normalize("mile12 is clear").split() == ["MILE12"]
+
+
 def test_kilo_heard_as_kelo() -> None:
     # Verbatim from a replay: "KELO 7XY, Yankee, Zulu, checking in with traffic."
     matcher = CallsignMatcher(roster=ROSTER)

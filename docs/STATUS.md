@@ -157,149 +157,14 @@ Both can now be switched on from the dashboard without restarting.
 
 ## On hardware
 
-Worth recording because it changes what to buy. **Escalation lowers the bar
-substantially**: the big model only has to handle the lines the fast one was
-unsure about, in the gaps, so the machine does not need to run `large-v3` on
-every transmission in real time.
+Moved to [HARDWARE.md](HARDWARE.md), which now carries the engine and
+model-size benchmarks, the accelerator options, and the buying argument.
 
-That makes `base` or `small` live on CPU with `large-v3` on escalation a
-comfortable target for a 6 GB laptop GPU, rather than something needing a
-desktop card. A laptop also brings a built-in UPS, which in a trailer running
-off a generator is worth more than the extra speed of a desktop.
-
-The number that settles it is on the status strip: **speed** (the realtime
-factor). Under about 0.5× there is headroom for a bigger model; near 1.00×
-there is not. The strip also shows which device inference actually resolved to,
-because `device: auto` quietly falling back to the CPU on a machine with a GPU
-is a thing to notice beforehand rather than during.
-
-### Cost against performance
-
-There is no deadline here, which makes the sensible order **measure, then
-buy**. The app already reports the number that decides it: the realtime factor
-on the status strip, transcription time over audio length.
-
-1. **Start with the machine you have.** Run a recording through `--file` with
-   `base`, and read `speed` off the strip. Under about 0.5× there is headroom
-   for a bigger model; near 1.00× there is not. That measurement costs nothing
-   and answers the question better than any table.
-2. **Remember what escalation changes.** The big model only handles the lines
-   the fast one was unsure about, in the gaps — so "can it run `large-v3` on
-   every transmission" is the wrong question. `base` live with `small` or
-   `medium` on escalation is a much cheaper target, and on an event net with
-   any gaps at all it catches up.
-3. **Only then buy**, and buy for the measurement rather than the spec sheet.
-
-Rough tiers, cheapest first. Prices move and the used market moves faster, so
-treat the ordering as the useful part:
-
-| Spend | What it buys |
-| --- | --- |
-| Nothing | Existing machine, `base` on CPU. Genuinely worth testing before assuming it is not enough |
-| Mini PC | `base`/`small` on CPU, reliable and quiet, no CUDA |
-| Jetson Orin Nano | Everything up to `large-v3`, at 25 W, in exchange for an evening of build friction |
-| Used RTX laptop | The most compute per pound, plus a screen and a UPS |
-| RTX A2000 12 GB | The same capability in a box that is already there, at 70 W |
-
-The honest summary: **a GPU is a convenience here, not a requirement**, and
-which one matters less than whether the live model is small enough to keep up
-while escalation quietly does the hard lines behind it.
-
-### Measured: whisper.cpp against faster-whisper
-
-Run rather than assumed, since the engine choice gates the hardware choice.
-18 synthetic event-net transmissions (86 s of speech, `tools/make_test_audio.py`),
-cut into clips by the project's own VAD so this measures the real workload — short
-clips, `base`, beam 5, the roster prompt — rather than one long file. Apple M1
-Pro, 10 core. Median of five runs; `ok` counts transmissions where the project's
-own matcher recovered the right roster callsign. Reproduce with
-`tools/bench_engines.py`.
-
-| Engine | Device | Compute | Realtime | Callsigns |
-| --- | --- | --- | --- | --- |
-| faster-whisper, int8 | CPU | 11.2 s | 0.130× | 15/18 |
-| whisper.cpp, fp16 | CPU | 8.2 s | 0.095× | 13/18 |
-| whisper.cpp, fp16 | GPU (Metal) | **3.3 s** | **0.039×** | 14/18 |
-
-Three things fall out of this, and only the third is much of an argument for
-switching.
-
-**On the CPU whisper.cpp is faster, but not decisively.** Around 1.4× here,
-and that figure is the least trustworthy one in the table: faster-whisper was
-steady near 11.2 s across samples while whisper.cpp ranged 7.0–8.8 s, so the
-ratio moves between 1.3× and 1.6× depending on the run. An earlier median of
-three runs put them level, which was simply too small a sample. Treat this row
-as "somewhat faster", not as a number.
-
-**The 3.4× is the GPU, and the GPU is the whole point.** faster-whisper could
-not touch this machine's GPU at all: CTranslate2 speaks CUDA, and there is no
-CUDA here. whisper.cpp used Metal and took less than a third of the time. That
-is the Vulkan argument in miniature — the win is not a better engine, it is
-*being allowed to use hardware that is already present*. The CPU row is a
-tuning difference; this row is a capability difference, and only capability
-differences justify the disruption of changing engines.
-
-**Nothing produced a wrong callsign.** Zero across every configuration; the
-losses were all lines left unmatched. The prefer-unmatched bias is a property of
-the matcher rather than of Whisper, so it survives an engine swap — which is
-what makes swapping engines a reasonable thing to consider at all.
-
-Two cautions about the numbers. The audio is TTS, which enunciates far better
-than a handheld into a repeater, so every accuracy figure here is optimistic and
-only the *ranking* is worth anything. And the roster prompt matters more than
-the engine did: dropping it cost faster-whisper 15→12 and whisper.cpp 14→10. On
-whisper.cpp `-mc 0`, the apparent analogue of `condition_on_previous_text=False`,
-silently discards the initial prompt as well — worth knowing, since it looks
-like a fair comparison and is not. Whatever engine ends up in front, the prompt
-budget in `stt_worker.py` is doing more work than the model choice.
-
-### What to run it on
-
-Ranked for *this* use — a trailer, mains that may be a generator, gear that
-travels — rather than on price per teraflop.
-
-| | Real CUDA | Power | Setup | Notes |
-| --- | --- | --- | --- | --- |
-| **Used RTX laptop** | yes | 60–150 W | easy | The battery is a UPS. Most compute per pound, screen included |
-| **RTX A2000 (6/12 GB)** | yes | 70 W | easy | Single-slot, low-profile, no aux power, its own fan. The best card for a fixed install; the 12 GB runs `large-v3` without thinking |
-| RTX A1000 / A400 | yes | ~50–70 W | easy | Newer Ada equivalents in the same envelope, less VRAM |
-| **Jetson Orin Nano Super** | yes | 7–25 W | fiddly | Lowest power with real CUDA. Needs an aarch64 CUDA build of CTranslate2 |
-| Tesla T4 / A2 | yes | 60–70 W | easy | 16 GB, but **passively cooled** — needs forced airflow outside a server |
-| x86 mini PC (N100) | no | 15–30 W | easy | Cheapest reliable CPU-only path; `base`/`small` comfortably |
-| Raspberry Pi 5 | no | 10–15 W | easy | `tiny`/`base`, no headroom |
-| A phone | no | — | no | The accelerator is not reachable from this stack |
-
-Everything above the mini PC is NVIDIA because CTranslate2 speaks CUDA and
-nothing else. Intel Arc and AMD cards become options only if the transcription
-engine changes — which is item 2 on the list below, not a config setting.
-
-**Laptop for kit that moves, Jetson for kit that is bolted in.** The Jetson's
-8 GB is shared between CPU and GPU, so `small` live plus `large-v3` escalation
-is tighter than it looks — `int8_float16` halves both.
-
-Used models worth searching for, if it comes to that:
-
-- **Ex-corporate mobile workstations** — built for sustained load, cheap off
-  lease, better cooling and dust tolerance than gaming machines. Dell Precision
-  7550/7560 (RTX A3000 6 GB, A4000 8 GB), Lenovo ThinkPad P15 or P1 Gen 3–4
-  (Quadro RTX/A-series), older Precision 7540 or ThinkPad P53 (Quadro RTX 3000).
-- **Gaming laptops** — more GPU per pound, louder, cooling varies. Lenovo
-  Legion 5 / 5 Pro (RTX 3060 6 GB / 3070 8 GB), ASUS TUF A15/F15, Dell G15,
-  Acer Nitro 5, HP Omen 15/16, ASUS Zephyrus G14/G15.
-
-Two things that decide it more than the model name:
-
-- **TGP varies wildly.** The same "RTX 3060" ships between 60 W and 130 W
-  depending on chassis, and a thin one can be half the speed of a thick one.
-  Look it up for the specific machine.
-- **Hybrid graphics on Linux.** Optimus can make CUDA hard to reach; a machine
-  with a MUX switch avoids the problem. The check is
-  `python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"`
-  — a 0 there on a machine with an NVIDIA GPU is the Optimus setup, not the
-  card.
-
-Prices and availability move; that part is worth checking rather than taking
-from here.
+The conclusion in one line: **nothing needs buying yet.** `base` scores the
+same as `medium` on the test net once the normalizer stops discarding
+callsigns, and runs at a fraction of realtime on an ordinary CPU. The number
+that would change that is `speed` on the status strip, measured against a real
+net.
 
 ## Where the CPU goes
 
@@ -338,31 +203,17 @@ features:
    the escalation design means a second engine can be tried on the hard lines
    before committing to it for the live ones.
 
-   **Worth doing before buying hardware, not after.** The engine decides which
-   accelerators are even candidates: CTranslate2 is CUDA-only, so today the
-   answer is NVIDIA or nothing. Choosing the card first forecloses everything
-   else. The measurement above is what this looks like in practice — on the
-   same CPU the two engines were close, and the interesting 3.4× came from whisper.cpp
-   being able to use a GPU that faster-whisper could not address, while the
-   CPU-only difference was a far less interesting 1.4×.
+   **Worth doing before buying hardware, not after**, since the engine decides
+   which accelerators are candidates at all — CTranslate2 being CUDA-only is
+   the whole reason the buying list is NVIDIA. Measured comparison, the
+   accelerators a Vulkan-capable engine would unlock, and the buying argument
+   are in [HARDWARE.md](HARDWARE.md).
 
-   **What a different engine would unlock.** `whisper.cpp` has CUDA, ROCm,
-   Vulkan, SYCL and Metal backends, and the Vulkan one makes almost any modern
-   GPU usable. That changes the shopping list entirely:
-
-   | Part | Why it becomes a candidate |
-   | --- | --- |
-   | Intel Arc A310 / A380 | 75 W, cheap, 4–6 GB, low-profile variants exist |
-   | AMD RX 6600 / 7600 | 8 GB, plentiful used, ROCm or Vulkan |
-   | Intel Core Ultra NPU | Via OpenVINO — no card at all, interesting for a mini PC |
-
-   The Arc A310 in particular is the interesting one for a trailer: single
-   slot, no aux power, and enough memory for `small` or `medium` — which is
-   all the live model ever needs to be when escalation is handling the hard
-   lines. `whisper.cpp` already exposes an OpenVINO encode path (`-oved`), so
-   the Core Ultra route needs no new engine, just a different build.
-
-   The build also ships a `parakeet-cli`, so the Parakeet half of this item can
+   Two findings from that benchmark belong here rather than there. `small`
+   scored *worse* than `base` at callsign recovery in every engine
+   configuration, which makes the current `escalation.model_size` default of
+   `small` the worst available choice if a real net reproduces it. And a build
+   of whisper.cpp ships a `parakeet-cli`, so the Parakeet half of this item can
    be tested through the same binary rather than a second stack.
 
 3. **Make matching source-aware.** Per-frequency rosters currently bias

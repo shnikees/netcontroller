@@ -129,6 +129,14 @@ AMBIGUOUS_DIGIT_MAP: dict[str, str] = {
     "seventh": "7",
     "ate": "8", "eighth": "8",
     "ninth": "9",
+    # Whisper sometimes writes a spoken digit between two phonetics as a Roman
+    # numeral: "victor echo three zulu" comes back as "Victor Echo III Zulu".
+    # Only the multi-character numerals are here -- "i", "v" and "x" are far
+    # likelier to be a spelled letter (or the word "I") than a number, and
+    # since these convert only in digit position, the ambiguous ones are not
+    # worth the risk of inventing a digit inside somebody's suffix.
+    "ii": "2", "iii": "3", "iv": "4",
+    "vi": "6", "vii": "7", "viii": "8", "ix": "9",
 }
 
 # Words that show up glued around callsigns in net traffic and should never be
@@ -285,6 +293,14 @@ def load_roster(path: str | Path) -> list[RosterEntry]:
 
 ORDINAL_SUFFIX_RE = re.compile(r"^([0-9]+)(st|nd|rd|th)$")
 
+NINER_SUFFIX_RE = re.compile(r"^([0-9]+)er$")
+""""9er" -- Whisper writing the spoken "niner" half numerically."""
+
+MAX_COLLAPSED_RUN = 3
+"""Longest alphabetic remnant still read as spelled-out characters rather than
+a word. Two or three letters left over beside a phonetic ("...4pq") are the
+model running "papa quebec" together; anything longer is probably English."""
+
 
 def _split_alphanumeric(token: str) -> list[str]:
     """Pull apart tokens where Whisper mixed digits and letters in one word.
@@ -293,14 +309,36 @@ def _split_alphanumeric(token: str) -> list[str]:
     a more clipped style, and these are the forms that come back:
 
         "5th"        an ordinal written numerically  -> 5
+        "9er"        "niner", half in digits         -> 9
         "3zulu"      a digit welded to a phonetic    -> 3, zulu
         "7xy"        a run of spelled characters     -> 7, x, y
+        "alpha4pq"   a phonetic welded to both       -> alpha, 4, p, q
 
     Left alone each of these blocks a match that would otherwise have worked.
     """
     ordinal = ORDINAL_SUFFIX_RE.match(token)
     if ordinal:
         return [ordinal.group(1)]
+
+    niner = NINER_SUFFIX_RE.match(token)
+    if niner:
+        return [niner.group(1)]
+
+    # A *phonetic word* welded to digits or stray letters. Requiring a known
+    # phonetic among the pieces is what keeps this off ordinary English: "mile12"
+    # has no phonetic in it and is left alone, where an unconditional split
+    # would turn it into a callsign-shaped "MILE" plus "12".
+    pieces = re.findall(r"[a-z]+|[0-9]+", token)
+    if len(pieces) > 1 and any(piece in PHONETIC_MAP for piece in pieces):
+        out: list[str] = []
+        for piece in pieces:
+            if piece.isdigit() or piece in PHONETIC_MAP:
+                out.append(piece)
+            elif len(piece) <= MAX_COLLAPSED_RUN:
+                out.extend(piece)  # spelled characters run together
+            else:
+                out.append(piece)
+        return out
 
     leading = re.fullmatch(r"([0-9]+)([a-z]+)", token)
     if leading and leading.group(2) in PHONETIC_MAP:
@@ -406,6 +444,12 @@ def tokenize(text: str) -> list[Token]:
         def emit(value: str) -> None:
             out.append(Token(value, start, end))
 
+        if _is_niner_tail(expanded, i):
+            # Deliberately emits nothing at all -- not even a BREAK. The word is
+            # not a word, it is the back half of "niner", and separating the
+            # prefix from the suffix is exactly the damage being repaired.
+            continue
+
         if token in PHONETIC_MAP:
             emit(PHONETIC_MAP[token])
         elif token in DIGIT_MAP:
@@ -441,6 +485,30 @@ def _is_digit_position(tokens: list[str], index: int) -> bool:
     if index == 0 or index + 1 >= len(tokens):
         return False
     return all(_is_spelling_token(tokens[i]) for i in (index - 1, index + 1))
+
+
+NINER_TAILS: frozenset[str] = frozenset({"or", "er"})
+"""What is left when Whisper splits "niner" across two words: "9 or", "9 er"."""
+
+
+def _is_niner_tail(tokens: list[str], index: int) -> bool:
+    """True if this token is the orphaned second syllable of "niner".
+
+    "kilo delta niner mike november oscar" comes back as "Kilo Delta 9 or Mike
+    November Oscar", and that stray "or" is not filler -- treating it as filler
+    ends the run and throws the whole suffix away, leaving KD9 to be rejected.
+
+    Kept narrow on both sides: the previous token must actually be a 9, and the
+    next must be a phonetic word, so this only fires mid-spelling. "Nine or ten
+    people" has no phonetic after it; "W6ABC or K7XYZ" has a letter, not a 9,
+    before it.
+    """
+    if tokens[index] not in NINER_TAILS or index == 0 or index + 1 >= len(tokens):
+        return False
+    previous = tokens[index - 1]
+    if DIGIT_MAP.get(previous, previous) != "9":
+        return False
+    return tokens[index + 1] in PHONETIC_MAP
 
 
 def _is_spelling_token(token: str) -> bool:
