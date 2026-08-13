@@ -74,6 +74,7 @@ code. `app.py` wires everything together and owns the process lifecycle.
 | `traffic.py` | Reads a traffic declaration off a transmission |
 | `feedback.py` | Operator corrections, and the aliases learned from them |
 | `voice_id.py` | Voice profiles, kept enrolment audio, suggestions |
+| `voice_onnx.py` | Runs a trained speaker model through ONNX Runtime |
 | `calibrate.py` | Thresholds derived from collected sessions and voices |
 | `transcript_store.py` | Session log, ordering, CSV/text export |
 | `session_writer.py` | Streams the session to disk as it happens |
@@ -189,11 +190,26 @@ somebody else's voice. So a suggestion is offered for the operator to accept
 with the click that already exists, and `TranscriptStore.suggest` refuses a
 line that is matched or has been corrected.
 
-The embedding is log-mel cepstral statistics in numpy — mean and deviation
-pooled over the clip, which makes it independent of what was said. Weaker than
-a trained speaker network and chosen so the app still installs on a Pi without
-a deep-learning runtime; with a high threshold and suggestion-only output, the
-weakness costs recall rather than correctness.
+The embedder is pluggable. The built-in one is log-mel cepstral statistics in
+numpy — mean and deviation pooled over the clip, independent of what was said,
+and chosen so the app installs on a Pi with no deep-learning runtime. It is
+weak, and partly identifies the radio rather than the operator.
+
+`voice_onnx.py` runs a trained speaker model instead, through `onnxruntime` —
+18 MB against hundreds for PyTorch or NeMo. On the CPU deliberately: the
+embedding is milliseconds either way, and any GPU belongs to Whisper.
+
+The interesting part is that exported speaker models disagree about their
+inputs — waveform or log-mel, feature axes either way round, a length argument
+or not. Rather than hard-coding one family's convention, the session is
+inspected and the feed built to match, which is what gives a model downloaded
+later a chance of working unmodified. That adapter is what the tests cover:
+there is no real model in the repository, so stand-ins are built on the spot,
+one per convention.
+
+Switching backends invalidates every profile, which is precisely why the
+enrolment audio is kept — `tools/rebuild_voices.py --compare` re-embeds and
+scores both on identical clips.
 
 ### `attendance.py`
 

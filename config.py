@@ -180,6 +180,16 @@ class VoiceConfig:
     """
 
     enabled: bool = False
+    backend: str = "builtin"
+    """builtin | onnx. The built-in embedder needs nothing installed; onnx runs
+    a trained speaker model (ECAPA, TitaNet) through onnxruntime, which is far
+    better at telling operators apart and survives a change of radio.
+
+    Switching invalidates every stored profile -- vectors from two models mean
+    nothing to each other -- so run tools/rebuild_voices.py afterwards. That is
+    what keeping the enrolment audio is for."""
+    model_path: str = "models/speaker.onnx"
+    """Where the ONNX speaker model lives, when backend is onnx."""
     path: str = "voices.json"
     """Profiles persist here, so next week's net starts knowing these voices."""
     min_similarity: float = 0.82

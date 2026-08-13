@@ -139,6 +139,22 @@ escalation:
 # silently. The dashboard offers it; you confirm with one click.
 voice:
   enabled: false
+  # builtin | onnx
+  #
+  # builtin needs nothing installed: log-mel cepstral statistics in numpy. It
+  # works, and it partly identifies the *radio* rather than the operator, so a
+  # profile breaks when somebody checks in mobile.
+  #
+  # onnx runs a trained speaker model (ECAPA-TDNN, TitaNet) through
+  # onnxruntime -- an 18 MB wheel and a model of about the same. Far better at
+  # telling operators apart, and trained to survive a change of microphone.
+  # Download an ONNX export and point model_path at it.
+  #
+  # Switching invalidates every stored profile, since vectors from two models
+  # mean nothing to each other. Run tools/rebuild_voices.py afterwards -- that
+  # is what keeping the enrolment audio is for.
+  backend: builtin
+  model_path: models/speaker.onnx
   path: voices.json
   # How close a voice must be before it is worth suggesting. This is the one
   # number here that synthetic testing cannot set for you -- start high, and

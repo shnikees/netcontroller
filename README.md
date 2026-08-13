@@ -470,11 +470,50 @@ relayed transmission is somebody else's voice entirely.
 one thing no amount of synthetic testing can set correctly. Start high — a
 suggestion you have to think about is worse than no suggestion.
 
-The embedding is deliberately dependency-free (log-mel cepstral statistics in
-numpy), so it runs on a Pi without a deep-learning runtime. That is weaker than
-a trained speaker-embedding network, which is the honest trade for staying
-installable: it costs recall rather than correctness, since the threshold is
-high and the result is only ever a suggestion.
+### Which embedder
+
+Two, chosen with `voice.backend`:
+
+**`builtin`** (default) — log-mel cepstral statistics in numpy. Nothing to
+install, runs on a Pi, and honest about being weak: 24 hand-picked numbers that
+were never trained to tell one speaker from another. It also partly identifies
+the *radio* rather than the operator, so a profile built from somebody's HT
+breaks when they check in mobile.
+
+**`onnx`** — a trained speaker model (ECAPA-TDNN, TitaNet, or similar) run
+through `onnxruntime`: an 18 MB wheel plus a model of about the same, against
+hundreds of megabytes for PyTorch or NeMo. Discriminatively trained on
+thousands of speakers and augmented specifically for changes of microphone.
+Download an ONNX export, point `voice.model_path` at it, and set the backend:
+
+```yaml
+voice:
+  enabled: true
+  backend: onnx
+  model_path: models/speaker.onnx
+```
+
+It runs on the **CPU on purpose**. A speaker embedding is a small model over a
+few seconds of audio — milliseconds either way — and any GPU present belongs
+to Whisper.
+
+Exported speaker models disagree about their inputs: waveform or features,
+which way round the feature axes go, whether a length is passed alongside. The
+model is inspected and the input built to match, so a model downloaded later
+has a fair chance of working without a code change. A missing or unreadable
+model logs one line and falls back to `builtin` rather than stopping the net.
+
+**Switching backends invalidates every stored profile** — vectors from two
+models mean nothing to each other. That is what the kept enrolment audio is
+for:
+
+```bash
+python tools/rebuild_voices.py --compare
+```
+
+re-embeds the stored clips in one pass and scores the new embedder on the same
+audio, so the two can be compared honestly rather than across two different
+months of traffic.
 
 ### Traffic
 
@@ -722,7 +761,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-348 tests, all offline, no audio hardware needed — CI runs them on every push
+360 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

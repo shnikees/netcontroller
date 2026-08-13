@@ -68,8 +68,38 @@ MIN_SPEECH_S = 0.6
 # --------------------------------------------------------------------------
 
 
+_BACKEND = None
+"""A trained model, when one is configured. None means the built-in embedder."""
+
+
+def set_backend(backend) -> None:
+    """Install a trained embedder, or pass None to go back to the built-in one.
+
+    Vectors from two backends mean nothing to each other, so switching invalidates
+    every stored profile -- which is what the kept enrolment audio and
+    `tools/rebuild_voices.py` are for.
+    """
+    global _BACKEND
+    _BACKEND = backend
+
+
+def backend_name() -> str:
+    return "built-in" if _BACKEND is None else getattr(
+        _BACKEND, "path", type(_BACKEND).__name__
+    ).__str__()
+
+
 def embed(audio: np.ndarray, rate: int = SAMPLE_RATE) -> np.ndarray | None:
-    """Turn a clip into a fixed-length voice vector, or None if too short.
+    """Turn a clip into a fixed-length voice vector, or None if too short."""
+    if audio is None or len(audio) < int(rate * MIN_SPEECH_S):
+        return None
+    if _BACKEND is not None:
+        return _BACKEND(np.asarray(audio, dtype=np.float32), rate)
+    return embed_builtin(audio, rate)
+
+
+def embed_builtin(audio: np.ndarray, rate: int = SAMPLE_RATE) -> np.ndarray | None:
+    """The dependency-free embedder: log-mel cepstral statistics.
 
     Mean and standard deviation of log-mel cepstra across the clip: the mean
     carries the average timbre of the voice, the deviation carries how much it
@@ -117,11 +147,11 @@ def _frame(audio: np.ndarray, rate: int) -> np.ndarray:
     return audio[indices]
 
 
-_FILTERBANK_CACHE: dict[tuple[int, int], np.ndarray] = {}
+_FILTERBANK_CACHE: dict[tuple[int, int, int], np.ndarray] = {}
 
 
-def _mel_filterbank(frame_size: int, rate: int) -> np.ndarray:
-    key = (frame_size, rate)
+def _mel_filterbank(frame_size: int, rate: int, mels: int = MEL_FILTERS) -> np.ndarray:
+    key = (frame_size, rate, mels)
     if key in _FILTERBANK_CACHE:
         return _FILTERBANK_CACHE[key]
 
@@ -129,12 +159,12 @@ def _mel_filterbank(frame_size: int, rate: int) -> np.ndarray:
     # 80 Hz to 4 kHz: the band an FM voice channel actually carries, so the
     # filters are spent where there is signal rather than on empty spectrum.
     low, high = _to_mel(80.0), _to_mel(4000.0)
-    points = _from_mel(np.linspace(low, high, MEL_FILTERS + 2))
+    points = _from_mel(np.linspace(low, high, mels + 2))
     positions = np.floor((frame_size + 1) * points / rate).astype(int)
     positions = np.clip(positions, 0, bins - 1)
 
-    bank = np.zeros((MEL_FILTERS, bins), dtype=np.float32)
-    for i in range(MEL_FILTERS):
+    bank = np.zeros((mels, bins), dtype=np.float32)
+    for i in range(mels):
         left, centre, right = positions[i], positions[i + 1], positions[i + 2]
         if centre > left:
             bank[i, left:centre] = np.linspace(0, 1, centre - left, endpoint=False)

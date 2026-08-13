@@ -22,6 +22,11 @@ fastapi>=0.110
 uvicorn[standard]>=0.27
 websockets>=12.0
 
+# Optional: run a trained speaker-embedding model (ECAPA, TitaNet) instead of
+# the built-in one. Without it, voice identification still works, less well.
+onnxruntime>=1.17
+
 # Tests
 pytest>=8.0
 httpx>=0.27          # fastapi.testclient
+onnx>=1.15           # builds a stand-in speaker model for the tests

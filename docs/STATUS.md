@@ -42,7 +42,7 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 348 offline tests run on every push across Python 3.11–3.13 plus a
+audio, with 360 offline tests run on every push across Python 3.11–3.13 plus a
 job with the optional libraries removed.
 
 | Area | What works |
@@ -92,6 +92,9 @@ Some of it was verified in ways worth trusting:
 - Attendance against real history. It has only ever scored sessions produced by
   replaying the same handful of recordings.
 - Any of it on a GPU. CUDA is auto-detected and never exercised.
+- The ONNX speaker backend against a *real* model. The adapter is tested
+  against stand-ins for each input convention, but no downloaded ECAPA or
+  TitaNet export has been run through it.
 
 [FIELD-BRINGUP.md](FIELD-BRINGUP.md) is the checklist for closing this gap, in
 an order where each step fails in a way you can diagnose.
@@ -203,33 +206,11 @@ features:
    the escalation design means a second engine can be tried on the hard lines
    before committing to it for the live ones.
 
-3. **A better voice embedder.** The current one is log-mel cepstral statistics
-   in numpy — 24 numbers describing average timbre, never trained to tell one
-   speaker from another. It also conflates the voice with the *channel*, so a
-   profile is really "Frank on his HT" and breaks when he checks in mobile.
-
-   A trained speaker network (ECAPA-TDNN, TitaNet) is discriminatively trained
-   on thousands of speakers and augmented specifically for channel robustness.
-   The route that preserves "installs on a Pi with no deep-learning stack" is
-   an **ONNX export run under `onnxruntime`** — an 18 MB wheel plus a ~25 MB
-   model, against hundreds of megabytes for PyTorch. Best added as
-   `voice.backend: mfcc | ecapa` so both can be compared.
-
-   `voice_id.embed()` is the only function that changes, and the evaluation
-   already exists: `tools/calibrate.py` prints same-station against
-   different-station similarity distributions, so the separation between those
-   two histograms *is* the measurement of whether the upgrade helped.
-
-   The clips are already being kept (`voice.keep_audio`), so this is now a
-   swap-and-rebuild rather than weeks of re-enrolment:
-   `tools/rebuild_voices.py --compare` scores both embedders on identical
-   audio.
-
-4. **Make matching source-aware.** Per-frequency rosters currently bias
+3. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
    would cut wrong matches on a 100-station roster — carefully, since people do
    turn up on the other frequency.
-5. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
+4. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
    The appeal is settling "what did they actually say" when the transcript
    itself is in doubt — but a race trailer already has several people talking,
    and playing a clip back into that room adds to the problem it is meant to
@@ -240,7 +221,7 @@ features:
    playback, but the stored clips make either possible. The clips kept for
    voice enrolment already prove the storage side works.
 
-6. **GPU on the status strip.** The strip reports CPU load and memory but
+5. **GPU on the status strip.** The strip reports CPU load and memory but
    says nothing about a GPU, which becomes the interesting number the moment
    there is one — utilisation, VRAM, and whether CUDA was actually picked up
    rather than silently falling back to CPU. `pynvml` or parsing `nvidia-smi`;
@@ -249,7 +230,7 @@ features:
    Small, and worth doing on the day the hardware arrives rather than
    discovering mid-event that the GPU was never in use.
 
-7. **Review after the net, not during it.** Everything self-supervised is in
+6. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards

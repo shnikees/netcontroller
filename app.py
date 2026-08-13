@@ -67,6 +67,8 @@ from stt_worker import SttWorker
 import traffic as traffic_detector
 from transcript_store import TranscriptStore
 from vad_segmenter import VadSegmenter
+import voice_id
+import voice_onnx
 from voice_id import EnrolmentAudio, VoiceProfiles
 
 log = logging.getLogger("net-stt")
@@ -408,6 +410,7 @@ class Pipeline:
 
     def start(self) -> None:
         self.stt.load()
+        self._configure_voice_backend()
         self.attendance = attendance_history.load(
             self.config.transcripts.dir, {e.callsign for e in self.matcher.roster}
         )
@@ -439,6 +442,31 @@ class Pipeline:
             len(self.sources),
             ", ".join(s.name for s in self.sources),
         )
+
+    def _configure_voice_backend(self) -> None:
+        """Install the trained speaker model, if one is configured and loadable.
+
+        A missing or broken model falls back to the built-in embedder with one
+        line in the log rather than stopping the net -- but the fallback is
+        said out loud, because silently identifying voices with a weaker model
+        than the profiles were built from would be worse than not trying.
+        """
+        if not self.config.voice.enabled:
+            return
+        if self.config.voice.backend != "onnx":
+            voice_id.set_backend(None)
+            return
+
+        embedder = voice_onnx.load(self.config.voice.model_path)
+        voice_id.set_backend(embedder)
+        if embedder is not None:
+            log.info(
+                "Voice: %s speaker model, %s input",
+                Path(self.config.voice.model_path).name,
+                embedder.kind,
+            )
+        else:
+            log.warning("Voice: using the built-in embedder")
 
     def stop(self) -> None:
         self._stop.set()
