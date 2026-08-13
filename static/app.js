@@ -819,6 +819,36 @@ function renderStatusStrip(health) {
   }
 
   const system = health.system || {};
+  const gpu = system.gpu;
+  const compute = health.compute || {};
+
+  if (gpu) {
+    const vram = gpu.memory_total_mb
+      ? `${(gpu.memory_used_mb / 1024).toFixed(1)}/${(gpu.memory_total_mb / 1024).toFixed(1)} GB`
+      : "";
+    parts.push(
+      `<span class="stat"><span class="k">gpu</span>` +
+        meter((gpu.utilisation || 0) / 100) +
+        `<span class="v">${gpu.utilisation}%</span>` +
+        (vram ? `<span class="v">${vram}</span>` : "") +
+        `</span>`
+    );
+  }
+
+  // What inference actually resolved to. A GPU sitting there unused because
+  // `device: auto` fell back to the CPU is exactly the thing to notice before
+  // an event rather than during one.
+  if (compute.device) {
+    const idle = gpu && compute.device !== "cuda";
+    parts.push(
+      stat(
+        "compute",
+        `${compute.model || ""} ${compute.device}/${compute.compute_type}`.trim(),
+        idle ? "warn" : ""
+      )
+    );
+  }
+
   if (system.load_per_core !== undefined) {
     const load = system.load_per_core;
     parts.push(stat("load", `${load.toFixed(2)}/core`, load > 1 ? "bad" : load > 0.7 ? "warn" : ""));

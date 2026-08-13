@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from health import ERROR, OK, WARNING, HealthMonitor, system_stats
+from health import ERROR, OK, WARNING, HealthFleet, HealthMonitor, gpu_stats, system_stats
 
 
 class FakeClock:
@@ -321,3 +321,44 @@ def test_the_snapshot_carries_the_strip_values(monitor: HealthMonitor) -> None:
     assert data["buffer_fill"] == pytest.approx(0.3)
     assert data["realtime_factor"] == pytest.approx(0.1)
     assert data["backlog"] == 2
+
+
+# --------------------------------------------------------------------------
+# The GPU, and whether it is actually being used
+# --------------------------------------------------------------------------
+
+
+def test_asking_about_a_gpu_is_safe_without_one() -> None:
+    # The common case for this project: no NVIDIA driver anywhere.
+    result = gpu_stats()
+    assert result is None or {"utilisation", "memory_used_mb"} <= set(result)
+
+
+def test_a_machine_with_no_gpu_is_not_asked_repeatedly() -> None:
+    # The nvidia-smi fallback shells out; the strip refreshes every second.
+    import health
+
+    health._GPU_CACHE.update({"at": 0.0, "value": None})
+    gpu_stats()
+    first = dict(health._GPU_CACHE)
+    gpu_stats()
+    assert health._GPU_CACHE["value"] == first["value"]
+
+
+def test_the_compute_device_is_reported() -> None:
+    """`device: auto` quietly choosing the CPU on a machine with a GPU is the
+    thing to notice before an event, not during one."""
+    fleet = HealthFleet()
+    fleet.monitor("Main").capture_started()
+    fleet.note_compute("cuda", "float16", "large-v3")
+
+    compute = fleet.snapshot()["compute"]
+    assert compute["device"] == "cuda"
+    assert compute["compute_type"] == "float16"
+    assert compute["model"] == "large-v3"
+
+
+def test_compute_is_empty_until_a_model_loads() -> None:
+    fleet = HealthFleet()
+    fleet.monitor("Main").capture_started()
+    assert fleet.snapshot()["compute"] == {}

@@ -91,6 +91,8 @@ class SttWorker:
     no_speech_threshold: float = 0.6
     """Whisper invents text on clips that are only noise; these two are what
     keep a squelch tail from becoming a check-in."""
+    active_device: str = field(default="", init=False)
+    active_compute_type: str = field(default="", init=False)
     _model: object | None = field(default=None, init=False, repr=False)
     _tokenizer_cache: object | None = field(default=None, init=False, repr=False)
     prompt_terms_used: int = field(default=0, init=False)
@@ -127,6 +129,11 @@ class SttWorker:
         self._model = WhisperModel(
             self.model_size, device=device, compute_type=compute_type
         )
+        # Recorded so the dashboard can show what inference is *actually*
+        # running on: `device: auto` quietly choosing the CPU on a machine with
+        # a GPU is a thing to find out before an event, not during one.
+        self.active_device = device
+        self.active_compute_type = compute_type
 
     def _resolve_device(self) -> str:
         if self.device != "auto":

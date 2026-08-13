@@ -52,6 +52,23 @@ is the honest account of what is proven, what is not, and what to do next;
 [docs/FIELD-BRINGUP.md](docs/FIELD-BRINGUP.md) is the checklist for the first
 session at the hardware.
 
+## What it does
+
+- **Listens** to an SDR loopback, a radio's line output, or a microphone — one
+  receiver or several, each with its own level, VAD settings and health.
+- **Transcribes** each transmission with Whisper, conditioning the audio and
+  biasing decoding toward the stations most likely to speak.
+- **Identifies** the station: phonetic normalisation, fuzzy roster matching,
+  aliases learned from corrections, and voice recognition for transmissions
+  that carry no callsign at all. It refuses to guess rather than log a wrong
+  callsign.
+- **Shows** the transcript with each station's *position* on the course, marks
+  traffic and lets you clear it, and reports its own health continuously.
+- **Keeps** everything: transcripts written as the net runs and survive a power
+  cut, a session that can be resumed, and exports for the net report.
+- **Learns** between events — aliases, voices, attendance and thresholds all
+  improve from nets nobody was watching.
+
 ## Documentation
 
 - [docs/FIELD-BRINGUP.md](docs/FIELD-BRINGUP.md) — first-time setup against
@@ -111,11 +128,17 @@ operator turned out to be. It refuses to suggest anything it cannot support
 yet, and says what it is still short of — no number is better than a number
 that looks measured and is not.
 
-**Once, from a recording**, for the timing thresholds:
+**Once, from a recording**, for the timing thresholds. Every one of them ships
+as a reasoned guess about how a net sounds; ten minutes of your own traffic
+replaces the guesses with measurements:
 
 ```bash
 python tools/tune.py --audio net-recording.wav --roster roster.csv
 ```
+
+It sweeps the VAD and split thresholds, checks your audio level, and prints a
+config block. Where two candidates are indistinguishable on your recording it
+says so, rather than picking one and pretending.
 
 Replaying recordings to build the history is scriptable — `--batch` processes a
 file and exits instead of serving the dashboard:
@@ -124,25 +147,10 @@ file and exits instead of serving the dashboard:
 python app.py --file last-tuesday.wav --batch
 ```
 
-None of this needs an operator present. The roster is the supervision: a clean
-roster match is a labelled example, so voice profiles and calibration data
-accumulate on nets nobody was watching. Corrections make it better and faster,
-but they are not what makes it work.
-
-## Tuning against your own net
-
-Every threshold here ships as a reasoned guess about how a net sounds. Record
-ten minutes of your own traffic and measure them instead:
-
-```bash
-python tools/tune.py --audio net-recording.wav --roster roster.csv
-```
-
-It sweeps the VAD and split thresholds, checks your audio level, and prints a
-config block. There is no labelling step — the roster supplies the ground
-truth, since a good setting is one where each clip resolves to exactly one
-station. Where two candidates are indistinguishable on your recording, it says
-so rather than picking one and pretending.
+**None of this needs an operator present.** The roster is the supervision: a
+clean roster match is a labelled example, so voice profiles, attendance and
+calibration data all accumulate on nets nobody was watching. Corrections make
+it better and faster, but they are not what makes it work.
 
 ## Before you go live: replay a recording
 
@@ -706,6 +714,14 @@ Above 1.00× a clip took longer to transcribe than it took to say, which is the
 point at which a busy net will start arriving late. Drop a model size from the
 Settings panel and watch it fall.
 
+With an NVIDIA GPU present the strip also shows its utilisation and VRAM, and
+**which device inference actually resolved to** — `cuda/float16` against
+`cpu/int8`. That last one exists because `device: auto` silently falling back
+to the CPU is a thing to notice before an event rather than during one; the
+compute reading turns amber when a GPU is sitting there unused. `nvidia-smi` is
+enough for the numbers, and installing `nvidia-ml-py` makes the polling
+cheaper.
+
 **In the log** — console plus a rotating file in `logs/`, with a heartbeat line
 every minute so you can see the net progressing:
 
@@ -761,7 +777,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-360 tests, all offline, no audio hardware needed — CI runs them on every push
+364 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
@@ -789,13 +805,27 @@ The Whisper model is baked into the image at build time
 (`MODEL_SIZE=tiny docker compose build`), so a deployed container never needs
 the network.
 
-## Raspberry Pi notes
+## What to run it on
 
-- Use `tiny` or `base` on a Pi 4, `small` on a Pi 5. Do not target `medium`.
-- INT8 is the default on CPU already (`whisper.compute_type: null`).
-- SDR++/GQRX has real CPU cost of its own. If you are running both on one Pi,
-  watch headroom during an actual net — it may be worth splitting them across
-  two boxes.
+The short version, with the reasoning and specific machines in
+[docs/STATUS.md](docs/STATUS.md):
+
+| | Runs | Notes |
+| --- | --- | --- |
+| Used RTX laptop | anything, on CUDA | The battery is a UPS, which matters more in a trailer than the extra speed |
+| Jetson Orin Nano | anything, on CUDA | 7–25 W, for a permanent install. Needs an aarch64 CUDA build of CTranslate2 |
+| x86 mini PC | `base`, `small` on CPU | Cheapest reliable path with no GPU |
+| Raspberry Pi 5 | `tiny`, `base` | Works, no headroom. `small` only on a quiet net |
+| Raspberry Pi 4 | `tiny`, `base` | Do not target `medium` |
+
+INT8 is already the default on CPU (`whisper.compute_type: null`).
+
+If SDR++/GQRX runs on the same box, remember it has real CPU cost of its own —
+watch the status strip during an actual net before assuming one machine covers
+both. And escalation lowers the bar a long way: the big model only handles the
+lines the fast one was unsure about, so `base` live with `large-v3` on
+escalation is a comfortable target for hardware that could not run `large-v3`
+on every transmission.
 
 ## License
 
@@ -817,3 +847,10 @@ settings are still guesses. In short:
   relative cue and not a calibrated probability.
 - One Whisper model is shared across receivers, so two busy frequencies
   serialise rather than transcribe in parallel.
+- Traffic is detected from what was said; whether it was *passed* is your
+  click, not something the app infers from later transmissions.
+- Voice suggestions and attendance both need history, so the first event with
+  a new roster offers neither. Both improve every time the app runs.
+- Settings changed from the dashboard apply to the running process; saving to
+  `config.yaml` is a separate click, so an unsaved change is gone at the next
+  restart.

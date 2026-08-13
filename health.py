@@ -47,6 +47,13 @@ try:  # pragma: no cover - depends on what is installed
 except ImportError:  # pragma: no cover
     HAVE_PSUTIL = False
 
+try:  # pragma: no cover - only present with an NVIDIA driver
+    import pynvml
+
+    HAVE_PYNVML = True
+except ImportError:  # pragma: no cover
+    HAVE_PYNVML = False
+
 OK = "ok"
 WARNING = "warning"
 ERROR = "error"
@@ -367,7 +374,22 @@ class HealthFleet:
     silence_rms: float = 15.0
     clock: Callable[[], float] = time.monotonic
     _monitors: dict[str, HealthMonitor] = field(default_factory=dict)
+    _compute: dict = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def note_compute(self, device: str, compute_type: str, model: str = "") -> None:
+        """What inference actually resolved to.
+
+        Worth showing plainly: `device: auto` silently falling back to the CPU
+        on a machine with a GPU is a thing to discover before an event, not
+        during one.
+        """
+        with self._lock:
+            self._compute = {
+                "device": device,
+                "compute_type": compute_type,
+                "model": model,
+            }
 
     def monitor(self, name: str) -> HealthMonitor:
         with self._lock:
@@ -435,6 +457,7 @@ class HealthFleet:
             (s.backlog for s in per_source.values()), default=0
         )
         combined["system"] = system_stats()
+        combined["compute"] = dict(self._compute)
         return combined
 
 
@@ -461,6 +484,10 @@ def system_stats() -> dict:
     except (OSError, AttributeError):  # pragma: no cover - unusual platforms
         pass
 
+    gpu = gpu_stats()
+    if gpu:
+        stats["gpu"] = gpu
+
     if not HAVE_PSUTIL:
         return stats
 
@@ -475,3 +502,92 @@ def system_stats() -> dict:
     except Exception:  # pragma: no cover
         pass
     return stats
+
+
+# --------------------------------------------------------------------------
+# The GPU, if there is one
+# --------------------------------------------------------------------------
+
+_GPU_CACHE: dict = {"at": 0.0, "value": None}
+_GPU_POLL_S = 2.0
+"""How often to ask. pynvml is cheap; shelling out to nvidia-smi is not, and
+the strip refreshes every second."""
+
+_NVML_READY: bool | None = None
+
+
+def gpu_stats() -> dict | None:
+    """Utilisation and memory for the first NVIDIA GPU, or None if there is none.
+
+    Two ways in. `nvidia-ml-py` is a direct library call and costs nothing;
+    without it, `nvidia-smi` is parsed at a slower cadence. A machine with no
+    NVIDIA driver answers None once and is not asked again.
+    """
+    now = time.monotonic()
+    cached = _GPU_CACHE["value"]
+    # False is the "asked once, nothing there" marker and has to be checked
+    # before the freshness test, or it gets handed back to the caller as a
+    # value in its own right.
+    if cached is False:
+        return None
+    if cached is not None and now - _GPU_CACHE["at"] < _GPU_POLL_S:
+        return cached
+
+    value = _gpu_via_nvml() or _gpu_via_smi()
+    _GPU_CACHE["at"] = now
+    _GPU_CACHE["value"] = value if value else False
+    return value
+
+
+def _gpu_via_nvml() -> dict | None:  # pragma: no cover - needs a GPU
+    global _NVML_READY
+    if not HAVE_PYNVML or _NVML_READY is False:
+        return None
+    try:
+        if _NVML_READY is None:
+            pynvml.nvmlInit()
+            _NVML_READY = True
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        name = pynvml.nvmlDeviceGetName(handle)
+        return {
+            "name": name.decode() if isinstance(name, bytes) else str(name),
+            "utilisation": pynvml.nvmlDeviceGetUtilizationRates(handle).gpu,
+            "memory_used_mb": round(memory.used / (1024 * 1024)),
+            "memory_total_mb": round(memory.total / (1024 * 1024)),
+        }
+    except Exception:
+        _NVML_READY = False
+        return None
+
+
+def _gpu_via_smi() -> dict | None:  # pragma: no cover - needs a driver
+    import shutil
+    import subprocess
+
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        output = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if output.returncode != 0 or not output.stdout.strip():
+            return None
+        name, used_pct, used, total = [
+            part.strip() for part in output.stdout.splitlines()[0].split(",")
+        ]
+        return {
+            "name": name,
+            "utilisation": int(used_pct),
+            "memory_used_mb": int(used),
+            "memory_total_mb": int(total),
+        }
+    except Exception:
+        return None

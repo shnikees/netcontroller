@@ -50,6 +50,9 @@ class SlowStub:
     def __init__(self, delay: float = 0.0) -> None:
         self.delay = delay
         self.seen = 0
+        self.model_size = "stub"
+        self.active_device = "cpu"
+        self.active_compute_type = "stub"
         self._lock = threading.Lock()
 
     def load(self) -> None:

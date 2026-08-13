@@ -410,6 +410,13 @@ class Pipeline:
 
     def start(self) -> None:
         self.stt.load()
+        # Read defensively: a different engine may not report these, and
+        # swapping the engine is a live possibility.
+        self.fleet.note_compute(
+            getattr(self.stt, "active_device", ""),
+            getattr(self.stt, "active_compute_type", ""),
+            getattr(self.stt, "model_size", ""),
+        )
         self._configure_voice_backend()
         self.attendance = attendance_history.load(
             self.config.transcripts.dir, {e.callsign for e in self.matcher.roster}
@@ -548,6 +555,11 @@ class Pipeline:
         try:
             self.stt.reload(pending)
             self._prompts.clear()  # rebuilt against the new tokenizer
+            self.fleet.note_compute(
+                getattr(self.stt, "active_device", ""),
+                getattr(self.stt, "active_compute_type", ""),
+                pending,
+            )
             log.info("Live model now %s", pending)
         except Exception as exc:
             self.fleet.note_error(f"could not load {pending}: {exc}")

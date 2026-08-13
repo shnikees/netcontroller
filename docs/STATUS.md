@@ -42,7 +42,7 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 360 offline tests run on every push across Python 3.11–3.13 plus a
+audio, with 364 offline tests run on every push across Python 3.11–3.13 plus a
 job with the optional libraries removed.
 
 | Area | What works |
@@ -91,7 +91,8 @@ Some of it was verified in ways worth trusting:
   control is tested; none has been used under pressure.
 - Attendance against real history. It has only ever scored sessions produced by
   replaying the same handful of recordings.
-- Any of it on a GPU. CUDA is auto-detected and never exercised.
+- Any of it on a GPU. CUDA is auto-detected, the status strip reports what it
+  resolved to, and none of it has been run against an actual NVIDIA device.
 - The ONNX speaker backend against a *real* model. The adapter is tested
   against stand-ins for each input convention, but no downloaded ECAPA or
   TitaNet export has been run through it.
@@ -167,7 +168,50 @@ off a generator is worth more than the extra speed of a desktop.
 
 The number that settles it is on the status strip: **speed** (the realtime
 factor). Under about 0.5× there is headroom for a bigger model; near 1.00×
-there is not.
+there is not. The strip also shows which device inference actually resolved to,
+because `device: auto` quietly falling back to the CPU on a machine with a GPU
+is a thing to notice beforehand rather than during.
+
+### What to run it on
+
+Ranked for *this* use — a trailer, mains that may be a generator, gear that
+travels — rather than on price per teraflop.
+
+| | Real CUDA | Power | Setup | Notes |
+| --- | --- | --- | --- | --- |
+| **Used RTX laptop** | yes | 60–150 W | easy | The battery is a UPS. Most compute per pound, screen included |
+| **Jetson Orin Nano Super** | yes | 7–25 W | fiddly | For a permanent install. Needs an aarch64 CUDA build of CTranslate2 |
+| x86 mini PC (N100) | no | 15–30 W | easy | Cheapest reliable CPU-only path; `base`/`small` comfortably |
+| Raspberry Pi 5 | no | 10–15 W | easy | `tiny`/`base`, no headroom |
+| A phone | no | — | no | The accelerator is not reachable from this stack |
+
+**Laptop for kit that moves, Jetson for kit that is bolted in.** The Jetson's
+8 GB is shared between CPU and GPU, so `small` live plus `large-v3` escalation
+is tighter than it looks — `int8_float16` halves both.
+
+Used models worth searching for, if it comes to that:
+
+- **Ex-corporate mobile workstations** — built for sustained load, cheap off
+  lease, better cooling and dust tolerance than gaming machines. Dell Precision
+  7550/7560 (RTX A3000 6 GB, A4000 8 GB), Lenovo ThinkPad P15 or P1 Gen 3–4
+  (Quadro RTX/A-series), older Precision 7540 or ThinkPad P53 (Quadro RTX 3000).
+- **Gaming laptops** — more GPU per pound, louder, cooling varies. Lenovo
+  Legion 5 / 5 Pro (RTX 3060 6 GB / 3070 8 GB), ASUS TUF A15/F15, Dell G15,
+  Acer Nitro 5, HP Omen 15/16, ASUS Zephyrus G14/G15.
+
+Two things that decide it more than the model name:
+
+- **TGP varies wildly.** The same "RTX 3060" ships between 60 W and 130 W
+  depending on chassis, and a thin one can be half the speed of a thick one.
+  Look it up for the specific machine.
+- **Hybrid graphics on Linux.** Optimus can make CUDA hard to reach; a machine
+  with a MUX switch avoids the problem. The check is
+  `python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"`
+  — a 0 there on a machine with an NVIDIA GPU is the Optimus setup, not the
+  card.
+
+Prices and availability move; that part is worth checking rather than taking
+from here.
 
 ## Where the CPU goes
 
@@ -221,16 +265,7 @@ features:
    playback, but the stored clips make either possible. The clips kept for
    voice enrolment already prove the storage side works.
 
-5. **GPU on the status strip.** The strip reports CPU load and memory but
-   says nothing about a GPU, which becomes the interesting number the moment
-   there is one — utilisation, VRAM, and whether CUDA was actually picked up
-   rather than silently falling back to CPU. `pynvml` or parsing `nvidia-smi`;
-   the strip already has the layout for it.
-
-   Small, and worth doing on the day the hardware arrives rather than
-   discovering mid-event that the GPU was never in use.
-
-6. **Review after the net, not during it.** Everything self-supervised is in
+5. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards
