@@ -42,21 +42,37 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 348 offline tests. Segmentation, transcription, callsign matching,
-splitting a clip that caught two stations, corrections and alias learning,
-voice suggestions, multi-source capture, buffering and disk spill, live
-transcript writing, the watchdog, export, and the container image.
+audio, with 348 offline tests run on every push across Python 3.11–3.13 plus a
+job with the optional libraries removed.
+
+| Area | What works |
+| --- | --- |
+| Capture | Any input — SDR loopback, line in, microphone — at any sample rate, with per-source channel, gain and VAD settings |
+| Multiple receivers | Independent capture, health and priority per source; a tab each on the dashboard |
+| Segmentation | One clip per transmission, and splitting a clip that caught two stations on the pause between them |
+| Matching | Phonetic normalisation, fuzzy roster match, learned aliases, refusal when ambiguous |
+| Positions | The roster carries each operator's post; every line and the export show it |
+| Traffic | Declarations read off the transcript, badged, counted, filterable, and cleared with a click |
+| Voice | Profiles learned from clean matches and corrections; suggestions on unmatched lines only |
+| Attendance | Who turns up, learned from past sessions, used to order the prompt |
+| Durability | Crash-safe transcripts, disk spill, `--resume`, watchdog with auto-restart |
+| Operation | Settings panel, health strip, corrections, export, container image |
 
 Some of it was verified in ways worth trusting:
 
 - **Crash safety** — `kill -9` mid-net, no cleanup: the complete log was on
-  disk.
+  disk. Restarting with `--resume` continued the same log with the five
+  check-ins intact.
 - **A slow transcriber** — six transmissions through a queue of depth one with
   a deliberately slow model: all six logged, in order, nothing lost.
 - **Two stations in one clip** — 0.6 s apart, inside the VAD window: split into
   two correctly attributed lines.
 - **Voice** — a station checked in, spoke again later with no callsign at all,
   and was suggested correctly.
+- **A model swapped mid-net** — `tiny` to `base` partway through a recording:
+  all six lines still landed, the pause costing latency rather than audio.
+- **Traffic** — declarations detected including one that never says the word,
+  denials not flagged, and the filter narrowing four lines to the two holding.
 
 ## Not proven: the live audio path
 
@@ -71,6 +87,11 @@ Some of it was verified in ways worth trusting:
 - The container's PulseAudio socket mount. The image builds and serves; it has
   never carried audio.
 - The ring buffer's drop path under a machine genuinely falling behind.
+- The settings panel changing something that matters *while it matters*. Each
+  control is tested; none has been used under pressure.
+- Attendance against real history. It has only ever scored sessions produced by
+  replaying the same handful of recordings.
+- Any of it on a GPU. CUDA is auto-detected and never exercised.
 
 [FIELD-BRINGUP.md](FIELD-BRINGUP.md) is the checklist for closing this gap, in
 an order where each step fails in a way you can diagnose.
@@ -102,10 +123,23 @@ two candidates are indistinguishable on the audio you gave it.
 | `voice.min_similarity` | 0.82 | How alike two recordings of one operator look over FM |
 | `escalation.min_confidence` | 0.55 | Where "unsure" begins for your audio |
 | `audio.gain` | 1.0 | Entirely dependent on what you plugged into what — measured, not searched: `tune.py` reads the level and solves for it |
+| `traffic` phrasing | — | The phrase tables assume how *your* net announces traffic. Wrong wording shows up as missing badges, not wrong ones |
+| `attendance.DECAY` | 0.85 | How fast a crew turns over between events |
 
 `roster.threshold` (78) is the exception: it sits just under the 80 that one
 wrong character in a five-character callsign scores, which is arithmetic rather
 than a guess.
+
+## The tools that settle the guesses
+
+| Tool | What it needs | What it gives |
+| --- | --- | --- |
+| `tools/tune.py` | A recording and the roster | VAD and split thresholds, and the input level, measured rather than guessed |
+| `tools/calibrate.py` | Nets already run | Escalation and voice thresholds, from the transcripts and profiles the app writes anyway. `--apply` patches the config |
+| `tools/rebuild_voices.py` | Kept enrolment audio | Profiles rebuilt after an embedder change; `--compare` scores two embedders on identical clips |
+| `tools/make_test_audio.py` | Nothing | Synthetic net audio, for exercising the pipeline with no radio |
+
+None of them needs hand-labelling: the roster is the supervision throughout.
 
 ## Off by default, waiting on a decision
 
@@ -113,6 +147,24 @@ than a guess.
   is opt-in. Turn it on where you have the RAM or a GPU.
 - **`voice.enabled`** — needs a net or two of enrolment before it suggests
   anything, and its threshold needs tuning against real voices.
+
+Both can now be switched on from the dashboard without restarting.
+
+## On hardware
+
+Worth recording because it changes what to buy. **Escalation lowers the bar
+substantially**: the big model only has to handle the lines the fast one was
+unsure about, in the gaps, so the machine does not need to run `large-v3` on
+every transmission in real time.
+
+That makes `base` or `small` live on CPU with `large-v3` on escalation a
+comfortable target for a 6 GB laptop GPU, rather than something needing a
+desktop card. A laptop also brings a built-in UPS, which in a trailer running
+off a generator is worth more than the extra speed of a desktop.
+
+The number that settles it is on the status strip: **speed** (the realtime
+factor). Under about 0.5× there is headroom for a bigger model; near 1.00×
+there is not.
 
 ## Where the CPU goes
 
@@ -188,11 +240,23 @@ features:
    playback, but the stored clips make either possible. The clips kept for
    voice enrolment already prove the storage side works.
 
-6. **Review after the net, not during it.** Everything self-supervised is in
+6. **GPU on the status strip.** The strip reports CPU load and memory but
+   says nothing about a GPU, which becomes the interesting number the moment
+   there is one — utilisation, VRAM, and whether CUDA was actually picked up
+   rather than silently falling back to CPU. `pynvml` or parsing `nvidia-smi`;
+   the strip already has the layout for it.
+
+   Small, and worth doing on the day the hardware arrives rather than
+   discovering mid-event that the GPU was never in use.
+
+7. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards
    instead of requiring somebody at the keyboard while the net runs.
+
+   This matters more than its position suggests for a net nobody can attend:
+   it converts "I was there" into "I had ten minutes that week".
 
 ## Known limitations, not bugs
 
@@ -204,5 +268,9 @@ features:
   *passed* is the operator's click, not something the app infers from later
   transmissions.
 - Voice suggestions need enrolment, so the first net of a new roster offers
-  none.
+  none. Attendance is the same: the first event has no history to order the
+  prompt by, and both improve every time the app is run.
+- Settings changed from the dashboard apply to the running process. Saving to
+  `config.yaml` is a separate click, so a change made mid-net and never saved
+  is gone at the next restart — deliberate, but worth knowing.
 - Transcription is voice only — no CW, no digital modes.
