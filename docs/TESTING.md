@@ -11,7 +11,7 @@ the library is missing, and a fallback nobody exercises is a fallback that is
 broken. That job earned its keep immediately: the scipy-free high-pass turned
 out not to remove rumble at all, and is now a boxcar filter that does.
 
-364 tests, all offline, no audio hardware. About 20 seconds, most of it
+373 tests, all offline, no audio hardware. About 20 seconds, most of it
 the pipeline tests deliberately running a slow transcriber in real time.
 
 ## What each suite covers
@@ -82,6 +82,23 @@ Synthetic speech is uniform, so it cannot say how long *your* operators pause
 or how much dead air sits between two stations on *your* repeater. A recording
 can, and the roster does the labelling.
 
+## Comparing engines and model sizes
+
+`tools/bench_engines.py` runs a recording through the VAD and then through one
+or more engines, reporting realtime factor and *callsign recovery* rather than
+word error rate — a transcript that loses the callsign has lost where on the
+course the transmission came from.
+
+```bash
+python tools/bench_engines.py --audio net.wav --roster roster.csv \
+    --expected callsigns.txt --repeat 5
+```
+
+`--expected` is one callsign per line in transmission order, which is the only
+labelling it needs. Use `--repeat 5` and read the median: run-to-run spread on
+a laptop is around ten percent, enough to reverse a ranking by itself. Results
+so far are in [HARDWARE.md](HARDWARE.md).
+
 ## Adding a regression
 
 This is the main maintenance loop, and it is deliberately cheap. When a real
@@ -110,18 +127,37 @@ def test_whisper_hears_lima_as_lisa() -> None:
   ("for", "fifth"). These convert only when flanked by spelling tokens.
 - `FILLER_WORDS` — net phrases that should never be part of a callsign.
 
+If the miss is not a *mishearing* but a *rendering* — the model heard correctly
+and wrote it oddly — the fix is a splitter rather than a table entry:
+`_split_alphanumeric` (ordinals, `9er`, phonetics welded to digits),
+`_split_hyphens`, `_split_glued_phonetics`, or `_is_niner_tail`. Keep these
+narrow: each one must be unable to fire on ordinary English, and each needs a
+guard test proving it does not.
+
 **5. Run the whole suite.** The existing tests are there to catch a new entry
 that breaks an old case — particularly in `AMBIGUOUS_DIGIT_MAP`, where a
 too-eager entry turns ordinary English into callsign digits.
 
 ### What not to add
 
-Resist adding entries from synthesized audio. The TTS test set has produced
-artifacts like `Fictor` for "victor" and `quiddac` for "quebec" that no human
-voice would generate. Padding the tables with those makes matching looser for
-no real-world gain, and looser matching means wrong callsigns.
+Resist adding *mishearings* from synthesized audio. The TTS test set has
+produced artifacts like `Fictor` for "victor" and `quiddac` for "quebec" that
+no human voice would generate. Padding the tables with those makes matching
+looser for no real-world gain, and looser matching means wrong callsigns.
 
-The bar: **have I heard a real transmission produce this?** If not, leave it.
+The bar for a table entry: **have I heard a real transmission produce this?**
+If not, leave it.
+
+**Renderings are the exception, and the distinction matters.** `9er` for
+"niner", `III` for "three", `Alpha4PQ`, a hyphen welding two spelled words —
+these are choices Whisper makes about *how to write text it heard correctly*,
+and it makes them the same way whatever the audio source was. They generalise
+off synthetic audio in a way an acoustic artifact never does, and every one of
+them is a callsign silently discarded rather than a match made looser. The
+regressions added from the `bench_engines.py` run are all of this kind.
+
+The test: would this artifact survive if the same words came from a human on a
+handheld? A mishearing would not. A rendering would.
 
 ## Tuning thresholds
 

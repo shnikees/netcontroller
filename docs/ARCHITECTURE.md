@@ -126,10 +126,20 @@ The one module worth reading closely, and the only one with real domain logic.
 Four stages, each separately testable:
 
 1. `normalize()` — phonetics → letters, spoken digits → numerals, filler
-   dropped, single characters glued into words. Also splits tokens Whisper ran
-   together (`alfabravo` → `A B`) using a dynamic-programming word split that
-   only fires when the *whole* token decomposes into known vocabulary, so
-   ordinary English is untouched.
+   dropped, single characters glued into words. Also undoes the ways Whisper
+   *writes* a callsign it heard correctly, which is a surprisingly large share
+   of all losses: tokens run together (`alfabravo` → `A B`) via a
+   dynamic-programming split that only fires when the *whole* token decomposes
+   into known vocabulary; ordinals and `9er`; a phonetic welded to digits and
+   letters (`alpha4pq`), which only splits when a known phonetic is among the
+   pieces so `mile12` survives intact; Roman numerals, restricted to the
+   multi-character ones and to digit position; and the orphaned second syllable
+   of "niner" (`9 or Mike`), which is dropped without a `BREAK` because
+   separating prefix from suffix is the damage being repaired.
+
+   Every one of these is deliberately unable to fire on ordinary English, since
+   the cost of over-firing is a confident wrong callsign and the cost of
+   under-firing is a line somebody re-reads.
 2. `extract_candidates()` — regex for US callsign structure. Strict matches
    (1–2 letters, digit, 1–3 letters) rank ahead of loose ones, so a clean read
    wins over a mangled one in the same transmission.

@@ -368,11 +368,16 @@ because a mid-sized model is confident enough to "correct" spelled phonetics
 into ordinary English. That is one synthetic recording rather than a verdict,
 but check it against your own audio before reaching for a bigger model.
 
-**If the problem is fast-paced traffic, model size is the main lever.** A
-station who gives their callsign as one run-on phrase is harder for a small
-model than a quiet one who spells it out, and no amount of VAD tuning fixes a
-word the model never heard. `small` is the first thing to try; `beam_size: 5`
-(the default) is already doing what it can.
+**Model size is a lever for fast traffic, but try it last rather than first.**
+A station who rattles a callsign off as one run-on phrase is genuinely harder
+than one who spells it out, and no amount of VAD tuning fixes a word the model
+never heard. But on the one net measured so far, a bigger model was not the
+fix: `base` matched `medium` on callsign recovery once the normalizer stopped
+discarding callsigns, and `small` scored *worse* than either. Check the
+transcript before the model — if the callsign is legible in `raw_text` and the
+line still came back unmatched, the problem is downstream of Whisper and a
+bigger model will not touch it. `beam_size: 5` (the default) is already doing
+what it can.
 
 Two settings interact with fast nets and are worth knowing about:
 
@@ -432,7 +437,12 @@ whatever the radio's volume knob happened to be.
 **4. Escalation — the one that buys real accuracy.** The live line comes from a
 fast model. Anything that comes back **unmatched or low-confidence** is queued
 for a second pass with a bigger model, run only when nothing live is waiting,
-and the line is updated in place and marked. Since only the hard clips are
+and the line is updated in place. The re-transcribed line carries `escalated`
+in the log and in the export — but **the dashboard does not show it yet**, and
+nothing anywhere marks a line as *waiting* for its second pass, so between
+queueing and completion an escalated line is indistinguishable from a finished
+one. Both are on the list in [docs/STATUS.md](docs/STATUS.md). Since only the
+hard clips are
 escalated, you pay a fraction of the big model's cost while getting its
 accuracy exactly where the fast one failed:
 
@@ -441,8 +451,15 @@ whisper:
   model_size: base      # the live line
 escalation:
   enabled: true
-  model_size: small     # or medium/large-v3 on a GPU
+  model_size: medium    # or large-v3 on a GPU
 ```
+
+**Skip `small` for the second pass.** It is still the shipped default, but on
+the benchmark in [docs/HARDWARE.md](docs/HARDWARE.md) it recovered *fewer*
+callsigns than `base` in every engine configuration — so escalating to it can
+cost accuracy while spending twice the compute. `medium` scored full marks.
+One synthetic net is not proof, but it is the only evidence there is, and it
+points away from the default.
 
 The second pass is also *targeted*: it biases toward the handful of roster
 callsigns nearest to what was actually heard, which is a short list that fits
@@ -785,7 +802,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-364 tests, all offline, no audio hardware needed — CI runs them on every push
+373 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

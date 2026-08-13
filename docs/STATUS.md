@@ -42,7 +42,7 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 364 offline tests run on every push across Python 3.11–3.13 plus a
+audio, with 373 offline tests run on every push across Python 3.11–3.13 plus a
 job with the optional libraries removed.
 
 | Area | What works |
@@ -216,11 +216,20 @@ features:
    of whisper.cpp ships a `parakeet-cli`, so the Parakeet half of this item can
    be tested through the same binary rather than a second stack.
 
-3. **Make matching source-aware.** Per-frequency rosters currently bias
+3. **Show escalation state in the dashboard.** `escalated` is set on the entry
+   and reaches both the websocket payload and the export, but `static/app.js`
+   never renders it, so a second-pass line looks like any other. Worse, there
+   is no *pending* state at all: a line queued for escalation is
+   indistinguishable from a finished one, which on a busy net is exactly when
+   somebody is deciding whether to trust it. A badge for "re-transcribed" and a
+   quieter marker for "waiting" would close it, plus the queue depth on the
+   status strip beside the other counters.
+
+4. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
    would cut wrong matches on a 100-station roster — carefully, since people do
    turn up on the other frequency.
-4. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
+5. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
    The appeal is settling "what did they actually say" when the transcript
    itself is in doubt — but a race trailer already has several people talking,
    and playing a clip back into that room adds to the problem it is meant to
@@ -231,7 +240,7 @@ features:
    playback, but the stored clips make either possible. The clips kept for
    voice enrolment already prove the storage side works.
 
-5. **Review after the net, not during it.** Everything self-supervised is in
+6. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards

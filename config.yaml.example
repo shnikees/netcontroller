@@ -122,6 +122,10 @@ whisper:
 # default -- turn it on where you have the RAM (or a GPU).
 escalation:
   enabled: false
+  # Left at small pending a real net, but the synthetic benchmark in
+  # docs/HARDWARE.md has small recovering *fewer* callsigns than base while
+  # costing twice the compute, where medium scored full marks. Prefer medium
+  # if you have the RAM.
   model_size: small
   device: auto
   compute_type: null
