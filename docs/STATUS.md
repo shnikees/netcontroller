@@ -232,7 +232,22 @@ features:
    playback, but the stored clips make either possible. The clips kept for
    voice enrolment already prove the storage side works.
 
-5. **Improve the logging logic.** Raised as a future item, not yet scoped.
+5. **Property-test the matcher instead of only regressing it.**
+   `_spell_phonetically()` already turns a callsign into its spoken form, so
+   every roster entry can be spelled, mutated with the *rendering* artifacts
+   Whisper is known to produce -- hyphenation, glued phonetics, ordinals, Roman
+   numerals, a split "niner" -- and asserted to still match. No audio and no
+   hand-labelling: the roster is the ground truth, as everywhere else here.
+   All four normalizer bugs fixed on 2026-08-12 were single mutations of that
+   kind, which is the argument for it -- regressions only record misses that
+   already happened.
+
+   The second half is mining `feedback.jsonl`: every operator correction is a
+   labelled pair of raw text and the right answer, so a tool could emit
+   ready-made regression cases and close the copy-paste loop TESTING.md
+   currently describes by hand.
+
+6. **Improve the logging logic.** Raised as a future item, not yet scoped.
    What exists today: `logging_setup.py` writes rotating application logs,
    `session_writer.py` writes the fsynced JSONL transcript that `--resume`
    reads back, and the export writes CSV and text at the end. The pieces work,
@@ -242,7 +257,7 @@ features:
    between them is the right one. Worth settling before adding anything to
    them.
 
-6. **Review after the net, not during it.** Everything self-supervised is in
+7. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards
