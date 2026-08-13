@@ -142,6 +142,7 @@ than a guess.
 | `tools/calibrate.py` | Nets already run | Escalation and voice thresholds, from the transcripts and profiles the app writes anyway. `--apply` patches the config |
 | `tools/rebuild_voices.py` | Kept enrolment audio | Profiles rebuilt after an embedder change; `--compare` scores two embedders on identical clips |
 | `tools/make_test_audio.py` | Nothing | Synthetic net audio, for exercising the pipeline with no radio |
+| `tools/bench_engines.py` | A recording, and optionally a second engine | Realtime factor and callsign recovery per engine, on real clip-sized workloads — the measurement that should precede buying anything |
 
 None of them needs hand-labelling: the roster is the supervision throughout.
 
@@ -203,6 +204,54 @@ treat the ordering as the useful part:
 The honest summary: **a GPU is a convenience here, not a requirement**, and
 which one matters less than whether the live model is small enough to keep up
 while escalation quietly does the hard lines behind it.
+
+### Measured: whisper.cpp against faster-whisper
+
+Run rather than assumed, since the engine choice gates the hardware choice.
+18 synthetic event-net transmissions (86 s of speech, `tools/make_test_audio.py`),
+cut into clips by the project's own VAD so this measures the real workload — short
+clips, `base`, beam 5, the roster prompt — rather than one long file. Apple M1
+Pro, 10 core. Median of five runs; `ok` counts transmissions where the project's
+own matcher recovered the right roster callsign. Reproduce with
+`tools/bench_engines.py`.
+
+| Engine | Device | Compute | Realtime | Callsigns |
+| --- | --- | --- | --- | --- |
+| faster-whisper, int8 | CPU | 11.2 s | 0.130× | 15/18 |
+| whisper.cpp, fp16 | CPU | 8.2 s | 0.095× | 13/18 |
+| whisper.cpp, fp16 | GPU (Metal) | **3.3 s** | **0.039×** | 14/18 |
+
+Three things fall out of this, and only the third is much of an argument for
+switching.
+
+**On the CPU whisper.cpp is faster, but not decisively.** Around 1.4× here,
+and that figure is the least trustworthy one in the table: faster-whisper was
+steady near 11.2 s across samples while whisper.cpp ranged 7.0–8.8 s, so the
+ratio moves between 1.3× and 1.6× depending on the run. An earlier median of
+three runs put them level, which was simply too small a sample. Treat this row
+as "somewhat faster", not as a number.
+
+**The 3.4× is the GPU, and the GPU is the whole point.** faster-whisper could
+not touch this machine's GPU at all: CTranslate2 speaks CUDA, and there is no
+CUDA here. whisper.cpp used Metal and took less than a third of the time. That
+is the Vulkan argument in miniature — the win is not a better engine, it is
+*being allowed to use hardware that is already present*. The CPU row is a
+tuning difference; this row is a capability difference, and only capability
+differences justify the disruption of changing engines.
+
+**Nothing produced a wrong callsign.** Zero across every configuration; the
+losses were all lines left unmatched. The prefer-unmatched bias is a property of
+the matcher rather than of Whisper, so it survives an engine swap — which is
+what makes swapping engines a reasonable thing to consider at all.
+
+Two cautions about the numbers. The audio is TTS, which enunciates far better
+than a handheld into a repeater, so every accuracy figure here is optimistic and
+only the *ranking* is worth anything. And the roster prompt matters more than
+the engine did: dropping it cost faster-whisper 15→12 and whisper.cpp 14→10. On
+whisper.cpp `-mc 0`, the apparent analogue of `condition_on_previous_text=False`,
+silently discards the initial prompt as well — worth knowing, since it looks
+like a fair comparison and is not. Whatever engine ends up in front, the prompt
+budget in `stt_worker.py` is doing more work than the model choice.
 
 ### What to run it on
 
@@ -291,9 +340,30 @@ features:
 
    **Worth doing before buying hardware, not after.** The engine decides which
    accelerators are even candidates: CTranslate2 is CUDA-only, so today the
-   answer is NVIDIA or nothing, while `whisper.cpp` has Vulkan and ROCm
-   backends that would put Intel Arc and AMD cards on the list — often at
-   lower cost for the same result. Choosing the card first forecloses that.
+   answer is NVIDIA or nothing. Choosing the card first forecloses everything
+   else. The measurement above is what this looks like in practice — on the
+   same CPU the two engines were close, and the interesting 3.4× came from whisper.cpp
+   being able to use a GPU that faster-whisper could not address, while the
+   CPU-only difference was a far less interesting 1.4×.
+
+   **What a different engine would unlock.** `whisper.cpp` has CUDA, ROCm,
+   Vulkan, SYCL and Metal backends, and the Vulkan one makes almost any modern
+   GPU usable. That changes the shopping list entirely:
+
+   | Part | Why it becomes a candidate |
+   | --- | --- |
+   | Intel Arc A310 / A380 | 75 W, cheap, 4–6 GB, low-profile variants exist |
+   | AMD RX 6600 / 7600 | 8 GB, plentiful used, ROCm or Vulkan |
+   | Intel Core Ultra NPU | Via OpenVINO — no card at all, interesting for a mini PC |
+
+   The Arc A310 in particular is the interesting one for a trailer: single
+   slot, no aux power, and enough memory for `small` or `medium` — which is
+   all the live model ever needs to be when escalation is handling the hard
+   lines. `whisper.cpp` already exposes an OpenVINO encode path (`-oved`), so
+   the Core Ultra route needs no new engine, just a different build.
+
+   The build also ships a `parakeet-cli`, so the Parakeet half of this item can
+   be tested through the same binary rather than a second stack.
 
 3. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
