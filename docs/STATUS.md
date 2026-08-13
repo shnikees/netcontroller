@@ -172,6 +172,38 @@ there is not. The strip also shows which device inference actually resolved to,
 because `device: auto` quietly falling back to the CPU on a machine with a GPU
 is a thing to notice beforehand rather than during.
 
+### Cost against performance
+
+There is no deadline here, which makes the sensible order **measure, then
+buy**. The app already reports the number that decides it: the realtime factor
+on the status strip, transcription time over audio length.
+
+1. **Start with the machine you have.** Run a recording through `--file` with
+   `base`, and read `speed` off the strip. Under about 0.5× there is headroom
+   for a bigger model; near 1.00× there is not. That measurement costs nothing
+   and answers the question better than any table.
+2. **Remember what escalation changes.** The big model only handles the lines
+   the fast one was unsure about, in the gaps — so "can it run `large-v3` on
+   every transmission" is the wrong question. `base` live with `small` or
+   `medium` on escalation is a much cheaper target, and on an event net with
+   any gaps at all it catches up.
+3. **Only then buy**, and buy for the measurement rather than the spec sheet.
+
+Rough tiers, cheapest first. Prices move and the used market moves faster, so
+treat the ordering as the useful part:
+
+| Spend | What it buys |
+| --- | --- |
+| Nothing | Existing machine, `base` on CPU. Genuinely worth testing before assuming it is not enough |
+| Mini PC | `base`/`small` on CPU, reliable and quiet, no CUDA |
+| Jetson Orin Nano | Everything up to `large-v3`, at 25 W, in exchange for an evening of build friction |
+| Used RTX laptop | The most compute per pound, plus a screen and a UPS |
+| RTX A2000 12 GB | The same capability in a box that is already there, at 70 W |
+
+The honest summary: **a GPU is a convenience here, not a requirement**, and
+which one matters less than whether the live model is small enough to keep up
+while escalation quietly does the hard lines behind it.
+
 ### What to run it on
 
 Ranked for *this* use — a trailer, mains that may be a generator, gear that
@@ -180,10 +212,17 @@ travels — rather than on price per teraflop.
 | | Real CUDA | Power | Setup | Notes |
 | --- | --- | --- | --- | --- |
 | **Used RTX laptop** | yes | 60–150 W | easy | The battery is a UPS. Most compute per pound, screen included |
-| **Jetson Orin Nano Super** | yes | 7–25 W | fiddly | For a permanent install. Needs an aarch64 CUDA build of CTranslate2 |
+| **RTX A2000 (6/12 GB)** | yes | 70 W | easy | Single-slot, low-profile, no aux power, its own fan. The best card for a fixed install; the 12 GB runs `large-v3` without thinking |
+| RTX A1000 / A400 | yes | ~50–70 W | easy | Newer Ada equivalents in the same envelope, less VRAM |
+| **Jetson Orin Nano Super** | yes | 7–25 W | fiddly | Lowest power with real CUDA. Needs an aarch64 CUDA build of CTranslate2 |
+| Tesla T4 / A2 | yes | 60–70 W | easy | 16 GB, but **passively cooled** — needs forced airflow outside a server |
 | x86 mini PC (N100) | no | 15–30 W | easy | Cheapest reliable CPU-only path; `base`/`small` comfortably |
 | Raspberry Pi 5 | no | 10–15 W | easy | `tiny`/`base`, no headroom |
 | A phone | no | — | no | The accelerator is not reachable from this stack |
+
+Everything above the mini PC is NVIDIA because CTranslate2 speaks CUDA and
+nothing else. Intel Arc and AMD cards become options only if the transcription
+engine changes — which is item 2 on the list below, not a config setting.
 
 **Laptop for kit that moves, Jetson for kit that is bolted in.** The Jetson's
 8 GB is shared between CPU and GPU, so `small` live plus `large-v3` escalation
@@ -249,6 +288,12 @@ features:
    `stt_worker.py` is the only module that knows which engine is in use, and
    the escalation design means a second engine can be tried on the hard lines
    before committing to it for the live ones.
+
+   **Worth doing before buying hardware, not after.** The engine decides which
+   accelerators are even candidates: CTranslate2 is CUDA-only, so today the
+   answer is NVIDIA or nothing, while `whisper.cpp` has Vulkan and ROCm
+   backends that would put Intel Arc and AMD cards on the list — often at
+   lower cost for the same result. Choosing the card first forecloses that.
 
 3. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
