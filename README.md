@@ -437,11 +437,11 @@ whatever the radio's volume knob happened to be.
 **4. Escalation — the one that buys real accuracy.** The live line comes from a
 fast model. Anything that comes back **unmatched or low-confidence** is queued
 for a second pass with a bigger model, run only when nothing live is waiting,
-and the line is updated in place. The re-transcribed line carries `escalated`
-in the log and in the export — but **the dashboard does not show it yet**, and
-nothing anywhere marks a line as *waiting* for its second pass, so between
-queueing and completion an escalated line is indistinguishable from a finished
-one. Both are on the list in [docs/STATUS.md](docs/STATUS.md). Since only the
+and the line is updated in place and marked. The dashboard says which of the
+two states a line is in, because they mean opposite things to a reader: a
+queued line shows **waiting** — do not settle on this yet, it may still
+change — and a re-transcribed one shows **2nd pass**, meaning the better model
+has already had it. The strip counts what is outstanding. Since only the
 hard clips are
 escalated, you pay a fraction of the big model's cost while getting its
 accuracy exactly where the fast one failed:
@@ -802,7 +802,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-373 tests, all offline, no audio hardware needed — CI runs them on every push
+378 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

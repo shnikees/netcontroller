@@ -377,3 +377,115 @@ def test_sources_without_overrides_inherit_the_global_vad(tmp_path, loop) -> Non
     segmenter = pipeline.sources[0].segmenter
     assert segmenter.aggressiveness == pipeline.config.vad.aggressiveness
     assert segmenter.silence_ms == pipeline.config.vad.silence_ms
+
+
+# --------------------------------------------------------------------------
+# Escalation state
+#
+# The failure these guard against is a line stuck showing "waiting" for a
+# second pass that already happened, failed, or was dropped -- which tells net
+# control to hold off on a line that is never going to change.
+# --------------------------------------------------------------------------
+
+
+class FakeEscalator:
+    """Stands in for the second-pass SttWorker."""
+
+    def __init__(self, text: str = "", raises: bool = False) -> None:
+        self.text, self.raises = text, raises
+
+    def build_prompt(self, terms) -> str:
+        return ""
+
+    def transcribe(self, audio, prompt=""):
+        if self.raises:
+            raise RuntimeError("second pass exploded")
+        return type("R", (), {"text": self.text, "confidence": 0.9})()
+
+
+def escalating(tmp_path, loop):
+    pipeline, store = build(tmp_path, loop, SlowStub())
+    pipeline.config.escalation.enabled = True
+    pipeline.config.escalation.on_unmatched = True
+    return pipeline, store
+
+
+def unsure_entry(store):
+    from datetime import datetime
+
+    return store.add(
+        started_at=datetime(2026, 4, 1, 19, 0, 0),
+        matched=False,
+        matched_callsign=None,
+        operator_name="",
+        raw_text="something unclear",
+        confidence=0.3,
+        match_score=0.0,
+        clip_duration=3.0,
+        candidate="W6AB",
+    )
+
+
+def test_a_queued_line_is_marked_as_waiting(tmp_path, loop) -> None:
+    pipeline, store = escalating(tmp_path, loop)
+    entry = unsure_entry(store)
+    pipeline._maybe_escalate(entry, np.zeros(16_000, dtype=np.float32))
+
+    assert entry.escalation_pending is True
+    assert entry.escalated is False  # not the same statement
+
+
+def test_an_improved_line_stops_waiting_and_says_it_was_re_transcribed(
+    tmp_path, loop
+) -> None:
+    pipeline, store = escalating(tmp_path, loop)
+    entry = unsure_entry(store)
+    pipeline._maybe_escalate(entry, np.zeros(16_000, dtype=np.float32))
+    pipeline._escalator = FakeEscalator("whiskey six alpha bravo charlie")
+
+    assert pipeline._escalate_one() is True
+    assert entry.escalated is True
+    assert entry.escalation_pending is False
+    assert entry.matched_callsign == "W6ABC"
+
+
+def test_a_second_pass_that_gains_nothing_still_clears_the_waiting_mark(
+    tmp_path, loop
+) -> None:
+    pipeline, store = escalating(tmp_path, loop)
+    entry = unsure_entry(store)
+    pipeline._maybe_escalate(entry, np.zeros(16_000, dtype=np.float32))
+    pipeline._escalator = FakeEscalator("still nothing useful here")
+
+    pipeline._escalate_one()
+    assert entry.escalation_pending is False
+    # It genuinely was not re-transcribed into anything better, so it must not
+    # claim to have been.
+    assert entry.escalated is False
+
+
+def test_a_failing_second_pass_does_not_strand_the_line(tmp_path, loop) -> None:
+    pipeline, store = escalating(tmp_path, loop)
+    entry = unsure_entry(store)
+    pipeline._maybe_escalate(entry, np.zeros(16_000, dtype=np.float32))
+    pipeline._escalator = FakeEscalator(raises=True)
+
+    pipeline._escalate_one()
+    assert entry.escalation_pending is False
+
+
+def test_a_clip_dropped_from_a_full_queue_stops_claiming_to_be_waiting(
+    tmp_path, loop
+) -> None:
+    pipeline, store = escalating(tmp_path, loop)
+    pipeline._escalate = __import__("collections").deque(maxlen=2)
+    audio = np.zeros(16_000, dtype=np.float32)
+
+    first, second, third = (unsure_entry(store) for _ in range(3))
+    for entry in (first, second, third):
+        pipeline._maybe_escalate(entry, audio)
+
+    # The oldest was pushed out to make room, so it will never be re-transcribed.
+    assert first.escalation_pending is False
+    assert second.escalation_pending is True
+    assert third.escalation_pending is True

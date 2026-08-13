@@ -55,6 +55,14 @@ class TranscriptEntry:
     """Which receiver heard it, when more than one is configured."""
     escalated: bool = False
     """Re-transcribed by a larger model after the first pass was unsure."""
+    escalation_pending: bool = False
+    """Queued for that second pass but not through it yet.
+
+    Kept distinct from `escalated` because the two say opposite things to a
+    reader: one is "this line has had the better model's attention", the other
+    is "do not settle on this yet". Without it a line waiting in the queue is
+    indistinguishable from a finished one, which is exactly when somebody is
+    deciding whether to act on it."""
     position: str = ""
     """Where the station is posted. On an event net this is the point of
     identifying them at all: the callsign says where the traffic came from."""
@@ -219,6 +227,7 @@ class TranscriptStore:
         entry.candidate = candidate
         entry.unmatched_reason = unmatched_reason
         entry.escalated = True
+        entry.escalation_pending = False
         return entry
 
     def all(self) -> list[dict]:

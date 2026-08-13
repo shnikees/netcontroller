@@ -178,6 +178,18 @@
     display: block; font-size: 0.65rem; color: var(--unmatched);
     text-transform: uppercase; letter-spacing: 0.06em;
   }
+  /* Escalation. "waiting" is the louder of the two on purpose -- it is the one
+     that changes what net control should do with the line. "2nd pass" is a
+     footnote: useful when reading back, not something to interrupt for. */
+  .pending-mark {
+    display: block; font-size: 0.65rem; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .pending-mark::before { content: "\2026 "; }
+  .escalated-mark {
+    display: block; font-size: 0.65rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
   #banner .backlog { font-size: 0.8rem; opacity: 0.85; }
   .corrected-mark {
     display: block; font-size: 0.7rem; font-weight: 400; color: var(--muted);

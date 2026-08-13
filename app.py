@@ -699,13 +699,42 @@ class Pipeline:
             return
         if len(self._escalate) == self._escalate.maxlen:
             log.warning("Escalation queue full; dropping the oldest waiting clip")
+            # Dropped explicitly rather than letting the deque discard it
+            # silently, so the abandoned line stops claiming to be waiting.
+            dropped, *_ = self._escalate.popleft()
+            self._clear_pending(dropped)
+        entry.escalation_pending = True
         self._escalate.append((entry.id, audio, entry.candidate, entry.source))
+
+    def _clear_pending(self, entry_id: int) -> None:
+        """Take a line out of the waiting state and tell the dashboard."""
+        entry = self.store.get(entry_id)
+        if entry is None or not entry.escalation_pending:
+            return
+        entry.escalation_pending = False
+        asyncio.run_coroutine_threadsafe(
+            self.broadcaster.broadcast(
+                {"type": "correction", "entry": entry.to_dict(), "learned": False}
+            ),
+            self.loop,
+        )
 
     def _escalate_one(self) -> bool:
         """Re-transcribe one queued clip. Returns whether there was work."""
         if not self._escalate:
             return False
         entry_id, audio, candidate, source = self._escalate.popleft()
+        try:
+            return self._escalate_clip(entry_id, audio, candidate, source)
+        finally:
+            # Whatever happened -- improved, failed, gained nothing, or the clip
+            # went missing -- this line is no longer waiting. A badge stuck on
+            # "waiting" is worse than no badge, because it tells net control to
+            # hold off on a line that will never change. The `finally` is there
+            # so a future early return cannot reintroduce that.
+            self._clear_pending(entry_id)
+
+    def _escalate_clip(self, entry_id, audio, candidate, source) -> bool:
         if audio is None:
             return False
 

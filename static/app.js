@@ -195,6 +195,14 @@ function paintRow(row, entry) {
   const late = entry.late
     ? `<span class="late-mark" title="Transcribed from the backlog after the transmission had passed">late</span>`
     : "";
+  // Two different statements, so two different marks. "waiting" says do not
+  // settle on this line yet; "2nd pass" says the better model has already had
+  // it and this is as good as it gets.
+  const escalation = entry.escalation_pending
+    ? `<span class="pending-mark" title="Queued for a second pass with a bigger model — this line may still change">waiting</span>`
+    : entry.escalated
+      ? `<span class="escalated-mark" title="Re-transcribed by a bigger model after the first pass was unsure">2nd pass</span>`
+      : "";
   const src = entry.source
     ? `<span class="src-mark" data-source="${entry.source}">${entry.source}</span>`
     : "";
@@ -215,7 +223,7 @@ function paintRow(row, entry) {
       : "";
   row.dataset.traffic = outstanding ? "yes" : "";
   row.innerHTML =
-    `<td class="time">${fmtTime(entry.timestamp)}${src}${late}</td>` +
+    `<td class="time">${fmtTime(entry.timestamp)}${src}${late}${escalation}</td>` +
     `<td class="call" title="Click to set the callsign">${callsignCellHTML(entry)}</td>` +
     `<td class="text">${traffic}</td>` +
     `<td class="conf"><span class="bar${pct < 60 ? " low" : ""}"><span style="width:${pct}%"></span></span>${pct}%</td>`;
@@ -499,9 +507,13 @@ function updateStats() {
       .filter((e) => e.traffic === "yes" && !e.traffic_cleared && e.matched_callsign)
       .map((e) => e.matched_callsign)
   );
+  // Derived from the rows rather than from a server counter, so the strip and
+  // the badges can never disagree about how much is still outstanding.
+  const waiting = shown.filter((e) => e.escalation_pending).length;
   stats.textContent =
     `${shown.length} transmission${shown.length === 1 ? "" : "s"} · ` +
-    `${stations.size} station${stations.size === 1 ? "" : "s"}${scope}`;
+    `${stations.size} station${stations.size === 1 ? "" : "s"}${scope}` +
+    (waiting ? ` · ${waiting} awaiting 2nd pass` : "");
   trafficBtn.hidden = holding.size === 0 && !trafficOnly;
   trafficBtn.textContent = `Traffic: ${holding.size}`;
 }

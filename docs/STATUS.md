@@ -42,7 +42,7 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 373 offline tests run on every push across Python 3.11–3.13 plus a
+audio, with 378 offline tests run on every push across Python 3.11–3.13 plus a
 job with the optional libraries removed.
 
 | Area | What works |
@@ -57,6 +57,7 @@ job with the optional libraries removed.
 | Attendance | Who turns up, learned from past sessions, used to order the prompt |
 | Durability | Crash-safe transcripts, disk spill, `--resume`, watchdog with auto-restart |
 | Operation | Settings panel, health strip, corrections, export, container image |
+| Escalation | Queued lines badged *waiting* and counted on the strip; re-transcribed ones badged *2nd pass*, and never left stranded when a pass fails or is dropped |
 
 Some of it was verified in ways worth trusting:
 
@@ -216,20 +217,11 @@ features:
    of whisper.cpp ships a `parakeet-cli`, so the Parakeet half of this item can
    be tested through the same binary rather than a second stack.
 
-3. **Show escalation state in the dashboard.** `escalated` is set on the entry
-   and reaches both the websocket payload and the export, but `static/app.js`
-   never renders it, so a second-pass line looks like any other. Worse, there
-   is no *pending* state at all: a line queued for escalation is
-   indistinguishable from a finished one, which on a busy net is exactly when
-   somebody is deciding whether to trust it. A badge for "re-transcribed" and a
-   quieter marker for "waiting" would close it, plus the queue depth on the
-   status strip beside the other counters.
-
-4. **Make matching source-aware.** Per-frequency rosters currently bias
+3. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
    would cut wrong matches on a 100-station roster — carefully, since people do
    turn up on the other frequency.
-5. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
+4. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
    The appeal is settling "what did they actually say" when the transcript
    itself is in doubt — but a race trailer already has several people talking,
    and playing a clip back into that room adds to the problem it is meant to
@@ -239,6 +231,16 @@ features:
    cannot be trusted; the answer then is probably a better model rather than
    playback, but the stored clips make either possible. The clips kept for
    voice enrolment already prove the storage side works.
+
+5. **Improve the logging logic.** Raised as a future item, not yet scoped.
+   What exists today: `logging_setup.py` writes rotating application logs,
+   `session_writer.py` writes the fsynced JSONL transcript that `--resume`
+   reads back, and the export writes CSV and text at the end. The pieces work,
+   but they were each added for their own reason and have never been looked at
+   together — so the open questions are which of the three a reader actually
+   goes to after a net, what is missing from each, and whether the split
+   between them is the right one. Worth settling before adding anything to
+   them.
 
 6. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
