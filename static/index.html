@@ -204,6 +204,30 @@
   #banner ul { margin: 0; padding-left: 1.1rem; }
   .dot.warning { background: var(--unmatched); }
   .dot.error { background: #ff6b6b; }
+  /* The health strip. Always on, because the banner only speaks up when
+     something is already wrong -- this is for seeing the level sag or the
+     backlog grow while there is still time to do something about it. */
+  #status {
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.4rem; align-items: center;
+    padding: 0.5rem 1.25rem; font-size: 0.8rem; color: var(--muted);
+    background: #161b23; border-bottom: 1px solid var(--line);
+  }
+  #status[hidden] { display: none; }
+  .stat { display: flex; align-items: baseline; gap: 0.4rem; white-space: nowrap; }
+  .stat .k { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.07em; }
+  .stat .v { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .stat .v.warn { color: var(--unmatched); }
+  .stat .v.bad { color: #ff6b6b; }
+  /* A level meter reads faster than a number when you are glancing. */
+  .meter {
+    position: relative; width: 4.5rem; height: 0.5rem; border-radius: 3px;
+    background: #2c3340; overflow: hidden;
+  }
+  .meter > span { display: block; height: 100%; background: var(--matched); }
+  .meter > span.warn { background: var(--unmatched); }
+  .meter > span.bad { background: #ff6b6b; }
+  .stat .src { color: var(--accent); font-weight: 600; }
+
   /* Settings drawer. Slides over the log rather than replacing it: net
      control should still see the net while adjusting it. */
   #settings {
@@ -253,10 +277,12 @@
   <button id="scrollBtn" class="active">Auto-scroll: on</button>
   <button id="trafficBtn" hidden title="Show only transmissions that declared traffic">Traffic: 0</button>
   <button id="clearFilter" hidden>Clear filter</button>
+  <button id="statusBtn" class="active" title="Show the health strip">Status</button>
   <button id="settingsBtn" title="Adjust settings without leaving the net">Settings</button>
   <button id="exportBtn">Export log</button>
 </header>
 <div id="banner" hidden></div>
+<div id="status"></div>
 <div class="layout">
   <aside>
     <h2>Roster</h2>

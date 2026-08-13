@@ -804,7 +804,12 @@ class Pipeline:
             health.note_error(f"transcription failed: {exc}")
             log.exception("Transcription failed for %.1fs clip", clip.duration_ms / 1000)
             return
-        health.note_transcription(time.monotonic() - began, self._clips.qsize())
+        health.note_transcription(
+            time.monotonic() - began,
+            self._clips.qsize(),
+            audio_seconds=clip.duration_ms / 1000,
+        )
+        self.fleet.note_spill(self.spill.spilled, self.spill.pending())
         if not transcription.text:
             log.debug("Empty transcription for %.1fs clip", clip.duration_ms / 1000)
             return

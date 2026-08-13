@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from health import ERROR, OK, WARNING, HealthMonitor
+from health import ERROR, OK, WARNING, HealthMonitor, system_stats
 
 
 class FakeClock:
@@ -220,6 +220,17 @@ def test_dropped_audio_is_a_warning(monitor: HealthMonitor) -> None:
     assert "smaller Whisper model" in snapshot.issues[0]
 
 
+def test_the_fleet_reports_the_machine_as_well_as_the_sources() -> None:
+    from health import HealthFleet
+
+    fleet = HealthFleet()
+    fleet.monitor("Repeater").capture_started()
+    fleet.monitor("Repeater").note_frame(LOUD)
+    snapshot = fleet.snapshot()
+    assert "system" in snapshot
+    assert "buffer_fill" in snapshot and "realtime_factor" in snapshot
+
+
 def test_counters_and_timings_are_reported(monitor: HealthMonitor) -> None:
     monitor.capture_started()
     monitor.note_frame(LOUD)
@@ -253,3 +264,60 @@ def test_snapshot_serialises_for_the_dashboard(monitor: HealthMonitor) -> None:
     assert data["issues"] == []
     assert isinstance(data["signal_rms"], float)
     assert data["seconds_since_frame"] is not None
+
+
+# --------------------------------------------------------------------------
+# The numbers the status strip shows
+#
+# The banner only speaks when something is already wrong. These are for
+# watching the level sag or the machine saturate while there is still time.
+# --------------------------------------------------------------------------
+
+
+def test_the_realtime_factor_says_whether_it_is_keeping_up(
+    monitor: HealthMonitor,
+) -> None:
+    monitor.capture_started()
+    monitor.note_frame(LOUD)
+    # Four seconds of audio transcribed in one: comfortably ahead.
+    monitor.note_transcription(1.0, audio_seconds=4.0)
+    assert monitor.snapshot().realtime_factor == pytest.approx(0.25)
+
+    # Six seconds to transcribe four: falling behind, and the number says so.
+    monitor.note_transcription(6.0, audio_seconds=4.0)
+    assert monitor.snapshot().realtime_factor > 1.0
+
+
+def test_a_filling_buffer_is_warned_about_before_it_overflows(
+    monitor: HealthMonitor,
+) -> None:
+    """The earliest warning there is: audio arriving faster than it is read."""
+    monitor.capture_started()
+    monitor.note_frame(LOUD)
+    monitor.note_buffer(0.2)
+    assert monitor.snapshot().state == OK
+
+    monitor.note_buffer(0.8)
+    snapshot = monitor.snapshot()
+    assert snapshot.state == WARNING
+    assert "buffer" in snapshot.issues[0].lower()
+
+
+def test_system_stats_always_answer_the_saturation_question() -> None:
+    # psutil is optional; the load average is not, and it is the number that
+    # says whether the box is out of headroom.
+    stats = system_stats()
+    assert "load_per_core" in stats
+    assert stats["cores"] >= 1
+
+
+def test_the_snapshot_carries_the_strip_values(monitor: HealthMonitor) -> None:
+    monitor.capture_started()
+    monitor.note_frame(LOUD)
+    monitor.note_buffer(0.3)
+    monitor.note_transcription(0.5, backlog=2, audio_seconds=5.0)
+
+    data = monitor.snapshot().to_dict()
+    assert data["buffer_fill"] == pytest.approx(0.3)
+    assert data["realtime_factor"] == pytest.approx(0.1)
+    assert data["backlog"] == 2

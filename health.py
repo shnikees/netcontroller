@@ -34,10 +34,18 @@ from an injectable clock so the state machine can be tested without sleeping.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
+
+try:  # pragma: no cover - depends on what is installed
+    import psutil
+
+    HAVE_PSUTIL = True
+except ImportError:  # pragma: no cover
+    HAVE_PSUTIL = False
 
 OK = "ok"
 WARNING = "warning"
@@ -77,6 +85,13 @@ class Health:
     seconds_since_clip: float | None
     last_transcribe_s: float
     """How long the last transcription took; a proxy for keeping up."""
+    realtime_factor: float
+    """Transcription time divided by the length of the audio. Above 1 means
+    that clip took longer to transcribe than it took to say -- the number that
+    decides whether the machine can hold a busy net."""
+    buffer_fill: float
+    """How full the audio ring buffer is, 0-1. Climbing means the VAD is not
+    keeping up with the sound card, which is the earliest warning there is."""
     backlog: int
     """Clips waiting in memory for the transcriber."""
     spilled: int
@@ -108,6 +123,8 @@ class Health:
                 else round(self.seconds_since_clip, 1)
             ),
             "last_transcribe_s": round(self.last_transcribe_s, 2),
+            "realtime_factor": round(self.realtime_factor, 2),
+            "buffer_fill": round(self.buffer_fill, 3),
             "backlog": self.backlog,
             "spilled": self.spilled,
             "spill_pending": self.spill_pending,
@@ -151,6 +168,8 @@ class HealthMonitor:
         self._overflows = 0
         self._signal_rms = 0.0
         self._last_transcribe_s = 0.0
+        self._realtime_factor = 0.0
+        self._buffer_fill = 0.0
         self._backlog = 0
         self._spilled = 0
         self._spill_pending = 0
@@ -203,11 +222,20 @@ class HealthMonitor:
             self._clips += 1
             self._last_clip = self.clock()
 
-    def note_transcription(self, seconds: float, backlog: int = 0) -> None:
+    def note_transcription(
+        self, seconds: float, backlog: int = 0, audio_seconds: float = 0.0
+    ) -> None:
         with self._lock:
             self._transcriptions += 1
             self._last_transcribe_s = seconds
             self._backlog = backlog
+            if audio_seconds > 0:
+                self._realtime_factor = seconds / audio_seconds
+
+    def note_buffer(self, fill: float) -> None:
+        """How full the ring buffer is. Reported from the capture thread."""
+        with self._lock:
+            self._buffer_fill = fill
 
     def note_spill(self, spilled: int, pending: int) -> None:
         with self._lock:
@@ -280,6 +308,15 @@ class HealthMonitor:
                     )
                 )
 
+            if self._buffer_fill > 0.5:
+                issues.append(
+                    (
+                        WARNING,
+                        f"Audio buffer {self._buffer_fill:.0%} full -- the "
+                        "machine is not keeping up with the sound card",
+                    )
+                )
+
             if self._overflows:
                 issues.append(
                     (
@@ -306,6 +343,8 @@ class HealthMonitor:
                 seconds_since_frame=since_frame,
                 seconds_since_clip=since_clip,
                 last_transcribe_s=self._last_transcribe_s,
+                realtime_factor=self._realtime_factor,
+                buffer_fill=self._buffer_fill,
                 backlog=self._backlog,
                 spilled=self._spilled,
                 spill_pending=self._spill_pending,
@@ -386,4 +425,53 @@ class HealthFleet:
         combined["signal_rms"] = max(
             (s.signal_rms for s in per_source.values()), default=0.0
         )
+        combined["realtime_factor"] = max(
+            (s.realtime_factor for s in per_source.values()), default=0.0
+        )
+        combined["buffer_fill"] = max(
+            (s.buffer_fill for s in per_source.values()), default=0.0
+        )
+        combined["backlog"] = max(
+            (s.backlog for s in per_source.values()), default=0
+        )
+        combined["system"] = system_stats()
         return combined
+
+
+# --------------------------------------------------------------------------
+# The machine itself
+# --------------------------------------------------------------------------
+
+
+def system_stats() -> dict:
+    """CPU, memory and load, for the dashboard's status strip.
+
+    `psutil` gives the useful numbers; without it the load average alone still
+    answers the question that matters ("is this box saturated?"), and the
+    load average is in the standard library on every platform this runs on.
+    """
+    stats: dict = {"psutil": HAVE_PSUTIL}
+
+    try:
+        one, five, fifteen = os.getloadavg()
+        cores = os.cpu_count() or 1
+        stats["load"] = round(one, 2)
+        stats["load_per_core"] = round(one / cores, 2)
+        stats["cores"] = cores
+    except (OSError, AttributeError):  # pragma: no cover - unusual platforms
+        pass
+
+    if not HAVE_PSUTIL:
+        return stats
+
+    try:  # pragma: no cover - values depend on the machine
+        stats["cpu_percent"] = psutil.cpu_percent(interval=None)
+        memory = psutil.virtual_memory()
+        stats["memory_percent"] = memory.percent
+        stats["memory_available_mb"] = round(memory.available / (1024 * 1024))
+        stats["rss_mb"] = round(
+            psutil.Process().memory_info().rss / (1024 * 1024)
+        )
+    except Exception:  # pragma: no cover
+        pass
+    return stats

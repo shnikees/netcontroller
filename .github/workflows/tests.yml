@@ -67,19 +67,19 @@ jobs:
           sudo apt-get install -y --no-install-recommends libportaudio2
 
       - name: Install without soxr or scipy
-        # The Pi case: high-quality resampling and the IIR high-pass are both
-        # optional, and each has a fallback that only runs when the library is
-        # missing. This job is the only place those fallbacks are exercised.
+        # The Pi case: resampling, the IIR high-pass and the system stats are
+        # all optional, and each has a fallback that only runs when the library
+        # is missing. This job is the only place those fallbacks are exercised.
         run: |
           python -m pip install --upgrade pip
-          grep -vE '^(soxr|scipy)' requirements.txt > requirements-core.txt
+          grep -vE '^(soxr|scipy|psutil)' requirements.txt > requirements-core.txt
           pip install -r requirements-core.txt
 
       - name: Confirm the optional libraries really are absent
         run: |
           python - <<'PY'
           import importlib.util, sys
-          for name in ("soxr", "scipy"):
+          for name in ("soxr", "scipy", "psutil"):
               if importlib.util.find_spec(name) is not None:
                   sys.exit(f"{name} is installed; this job would not test the fallback")
           print("soxr and scipy absent, as intended")

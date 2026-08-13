@@ -651,10 +651,21 @@ missing and the dashboard looks fine the whole time.
 So the app watches three things: whether audio frames are arriving, whether
 there is any *signal* in them, and whether the machine is keeping up.
 
-**On the dashboard** — a red or amber banner naming the problem, the status dot
-changes colour, and it beeps once on the transition (toggle with the
-**Alerts** button; the setting sticks). The beep matters because the operator
-is usually looking at the radio, not the screen.
+**On the dashboard** — two halves. A **status strip** is always on, showing a
+level meter per receiver, how full the audio buffer is, the queue depth, the
+realtime factor, system load, memory and uptime. That is the half you watch to
+see a level sagging or the machine running out of headroom *before* anything
+has gone wrong; hide it with the **Status** button.
+
+The other half only speaks when something is already wrong: a red or amber
+**banner** naming the problem, a status dot that changes colour, and one beep
+on the transition (toggle with **Alerts**; the setting sticks). The beep
+matters because the operator is usually looking at the radio, not the screen.
+
+The number worth knowing on the strip is **speed** — the realtime factor.
+Above 1.00× a clip took longer to transcribe than it took to say, which is the
+point at which a busy net will start arriving late. Drop a model size from the
+Settings panel and watch it fall.
 
 **In the log** — console plus a rotating file in `logs/`, with a heartbeat line
 every minute so you can see the net progressing:
@@ -711,7 +722,7 @@ it is disconnected rather than showing a stale log as though it were live.
 .venv/bin/python -m pytest
 ```
 
-343 tests, all offline, no audio hardware needed — CI runs them on every push
+348 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;

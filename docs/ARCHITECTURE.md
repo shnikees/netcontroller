@@ -354,6 +354,16 @@ verdict: worst state wins, and issues are prefixed with the source name
 whenever there is more than one. With two radios in the room, "the pipeline is
 unhealthy" is not an instruction anybody can act on.
 
+The snapshot also carries what the dashboard's status strip shows: signal
+level per source, ring-buffer fill, queue depth, the **realtime factor**
+(transcription time over audio length -- above 1.0 the machine cannot hold a
+busy net), and the machine's own load and memory. `psutil` supplies CPU and
+memory when it is installed; without it the load average alone still answers
+the question that matters, and that is in the standard library.
+
+The split is deliberate: the banner speaks only when something is already
+wrong, and the strip is for seeing it coming.
+
 ### `vad_segmenter.py`
 
 A state machine with pre-roll and hangover:

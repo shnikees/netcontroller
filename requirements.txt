@@ -13,6 +13,9 @@ soxr>=0.3
 scipy>=1.11
 rapidfuzz>=3.6
 PyYAML>=6.0
+# CPU and memory for the dashboard's status strip. Optional: the load
+# average alone still answers 'is this box saturated?' without it.
+psutil>=5.9
 
 # Web dashboard
 fastapi>=0.110

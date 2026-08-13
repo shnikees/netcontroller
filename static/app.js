@@ -403,6 +403,7 @@ const sourceHealth = {};
 
 function renderHealth(health) {
   if (!health) return;
+  renderStatusStrip(health);
   const state = health.state || "ok";
   if (health.sources) {
     Object.assign(sourceHealth, health.sources);
@@ -739,3 +740,100 @@ settingsSave.onclick = async () => {
     showToast(`Could not save: ${err.message}`);
   }
 };
+
+
+/* Status strip -------------------------------------------------------------
+   The banner only speaks when something is already wrong. This is the other
+   half: seeing the level sag, the buffer fill or the machine saturate while
+   there is still time to do something about it. */
+
+const statusStrip = document.getElementById("status");
+const statusBtn = document.getElementById("statusBtn");
+let statusVisible = localStorage.getItem("netstt.status") !== "off";
+
+statusStrip.hidden = !statusVisible;
+statusBtn.classList.toggle("active", statusVisible);
+statusBtn.onclick = () => {
+  statusVisible = !statusVisible;
+  statusStrip.hidden = !statusVisible;
+  statusBtn.classList.toggle("active", statusVisible);
+  localStorage.setItem("netstt.status", statusVisible ? "on" : "off");
+};
+
+function stat(key, value, level = "") {
+  return `<span class="stat"><span class="k">${key}</span><span class="v ${level}">${value}</span></span>`;
+}
+
+function meter(fraction, level = "") {
+  const width = Math.max(0, Math.min(1, fraction)) * 100;
+  return `<span class="meter"><span class="${level}" style="width:${width}%"></span></span>`;
+}
+
+/* Speech sits well above this; the scale is logarithmic because the ear is,
+   and a linear meter spends most of its length on the loudest tenth. */
+function levelFraction(rms) {
+  if (!rms || rms <= 1) return 0;
+  return Math.min(1, Math.log10(rms) / Math.log10(8000));
+}
+
+function renderStatusStrip(health) {
+  if (statusStrip.hidden && !statusVisible) return;
+  const parts = [];
+  const sources = health.sources || {};
+  const names = Object.keys(sources);
+
+  for (const name of names) {
+    const source = sources[name];
+    const rms = source.signal_rms || 0;
+    // Quiet is not necessarily wrong -- a net has gaps -- so a low level is
+    // only called out once the source itself has decided it has been silent
+    // too long.
+    const level = source.state === "error" ? "bad" : rms < 15 ? "warn" : "";
+    const label = names.length > 1 ? `<span class="src">${escapeHTML(name)}</span>` : "level";
+    parts.push(
+      `<span class="stat"><span class="k">${label}</span>` +
+        meter(levelFraction(rms), level) +
+        `<span class="v ${level}">${Math.round(rms)}</span></span>`
+    );
+  }
+
+  const fill = health.buffer_fill || 0;
+  parts.push(
+    `<span class="stat"><span class="k">buffer</span>` +
+      meter(fill, fill > 0.5 ? "bad" : fill > 0.25 ? "warn" : "") +
+      `<span class="v">${Math.round(fill * 100)}%</span></span>`
+  );
+
+  const backlog = health.backlog || 0;
+  const pending = health.spill_pending || 0;
+  parts.push(
+    stat("queue", pending ? `${backlog} +${pending} disk` : backlog,
+         pending ? "warn" : backlog > 4 ? "warn" : "")
+  );
+
+  // The number that decides whether this machine can hold a busy net: above
+  // 1.0 a clip takes longer to transcribe than it took to say.
+  const rtf = health.realtime_factor || 0;
+  if (rtf) {
+    parts.push(stat("speed", `${rtf.toFixed(2)}×`, rtf > 1 ? "bad" : rtf > 0.7 ? "warn" : ""));
+  }
+
+  const system = health.system || {};
+  if (system.load_per_core !== undefined) {
+    const load = system.load_per_core;
+    parts.push(stat("load", `${load.toFixed(2)}/core`, load > 1 ? "bad" : load > 0.7 ? "warn" : ""));
+  }
+  if (system.memory_percent !== undefined) {
+    parts.push(
+      stat("memory", `${Math.round(system.memory_percent)}%`,
+           system.memory_percent > 90 ? "bad" : system.memory_percent > 75 ? "warn" : "")
+    );
+  }
+  if (system.rss_mb !== undefined) parts.push(stat("app", `${system.rss_mb} MB`));
+
+  const minutes = Math.floor((health.uptime_s || 0) / 60);
+  parts.push(stat("up", minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h${minutes % 60}m`));
+  parts.push(stat("lines", health.transcriptions || 0));
+
+  statusStrip.innerHTML = parts.join("");
+}
