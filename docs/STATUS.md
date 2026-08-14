@@ -257,6 +257,20 @@ features:
    between them is the right one. Worth settling before adding anything to
    them.
 
+   **First concrete requirement: attendance per day.** Today `attendance.py`
+   answers "who is likely to be on next time" — a decayed aggregate, held in
+   memory, recomputed from the transcripts at every startup and never written
+   anywhere. What is missing is the plain historical record: *who was on, on
+   which date, on which frequency, and how much did they say*. That is a
+   different artifact with a different reader — the aggregate is for the
+   decoder, the per-day record is for a human writing up an event afterwards
+   or answering "did we have Turn 7 covered at last year's race".
+
+   Worth noting it needs no new capture: every session file already holds it,
+   so this is a report over data on disk rather than a change to what gets
+   recorded. It also answers half the scoping question above — this is the
+   transcript side, not the application logs.
+
 7. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
