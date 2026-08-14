@@ -252,10 +252,43 @@ features:
    `session_writer.py` writes the fsynced JSONL transcript that `--resume`
    reads back, and the export writes CSV and text at the end. The pieces work,
    but they were each added for their own reason and have never been looked at
-   together — so the open questions are which of the three a reader actually
-   goes to after a net, what is missing from each, and whether the split
-   between them is the right one. Worth settling before adding anything to
-   them.
+   together. Four questions to settle before adding anything to them:
+
+   **a. Who reads which file, and when?** Four readers, and it is not obvious
+   any of them is well served. *During* a net nobody reads a file — the
+   dashboard is the interface. *Straight after*, somebody writes up the event
+   and wants the net record. *Months later*, somebody asks "was Turn 7 covered
+   at last year's race" or "what was said at 10:42". And *when something
+   breaks*, somebody wants to know why audio stopped at 09:15. The first three
+   want the transcript; the fourth wants the application log; and nothing today
+   was designed against any of them specifically.
+
+   **b. What is missing from the net record?** Three concrete gaps, each
+   verifiable in the code today. The session file opens with
+   `{"type": "session", "started_at": ...}` and carries **no record of the
+   roster or thresholds in force** — so a transcript cannot be reinterpreted
+   later, because the roster it was matched against may have changed. There is
+   **no session-end marker**, so a file that stops cannot be told apart from a
+   net that crashed. And timestamps are written **without a timezone**
+   (`isoformat()` on a naive local datetime), which is fine on one machine and
+   wrong the moment a record crosses a timezone or a DST boundary.
+
+   **c. Should the two records converge?** A device dying, a model being
+   swapped mid-net, an operator changing a threshold — all go to the
+   application log only, and share no key with the session file. So "why did
+   the transcripts get worse after 10:00" requires reading two files side by
+   side and matching them up by eye. Putting operational events into the
+   session JSONL would make one file the whole account of a net; the cost is a
+   transcript format that is no longer only transcripts.
+
+   **d. What is the retention policy, and who is silently depending on it?**
+   The application log rotates by size (`maxBytes`/`backupCount`), so a busy
+   install can lose the log covering an earlier net while that net's transcript
+   survives — the two records age out on unrelated schedules. Session files are
+   never pruned at all. And **attendance is derived from them at every
+   startup**, so deleting old transcripts quietly changes the decoding priors
+   for the next net. Any retention rule has to be decided with that coupling in
+   view, not after.
 
    **First concrete requirement: attendance per day.** Today `attendance.py`
    answers "who is likely to be on next time" — a decayed aggregate, held in
