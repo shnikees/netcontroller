@@ -23,8 +23,13 @@ SDR / radio ──▶ loopback, line in, or mic ──▶ capture ──▶ VAD 
 
 ![The dashboard during an event net: each line shows the callsign, the
 position that station is posted at, and the operator's name, with traffic
-declarations badged and a roster sidebar acting as a who-is-where
-board](docs/images/dashboard.png)
+declarations badged, lines re-transcribed by the second pass marked, and a
+roster sidebar acting as a who-is-where board](docs/images/dashboard.png)
+
+<sub>Deliberately an unflattering run: `tiny` live with `base` on escalation, so
+the **2nd pass** marks are visible and a couple of lines are left as `tiny`
+produced them. `base` on its own transcribes this recording cleanly — see
+[docs/HARDWARE.md](docs/HARDWARE.md).</sub>
 
 Each line carries the callsign, **where that station is posted**, and the
 operator's name. On an event net the position is the actionable half: "need
