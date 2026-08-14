@@ -309,6 +309,37 @@ def test_the_new_splits_leave_ordinary_english_alone(raw: str) -> None:
     assert not matcher.match(raw).matched, normalize(raw)
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("whiskey 6ABC, checking in", "W6ABC"),
+        ("kilo 7ABC", "K7ABC"),
+        ("Alpha4PQ, in position", "AA4PQ"),
+    ],
+)
+def test_the_letter_a_survives_a_collapsed_suffix(raw: str, expected: str) -> None:
+    """Found by the property suite, not by a net.
+
+    A collapsed suffix arrives as bare characters, and the bare character "a"
+    was being looked up as the English article in FILLER_WORDS -- dropped, and
+    because a dropped word emits a BREAK, taking the rest of the callsign with
+    it. "whiskey 6ABC" normalized to "W6 BC" and matched nothing. Every
+    callsign with an A in a collapsed suffix was affected.
+    """
+    matcher = CallsignMatcher(
+        roster=ROSTER + [RosterEntry("K7ABC"), RosterEntry("AA4PQ")]
+    )
+    result = matcher.match(raw)
+    assert result.matched, f"{raw!r} -> {normalize(raw)!r} ({result.reason})"
+    assert result.callsign == expected
+
+
+def test_the_article_a_is_still_filler() -> None:
+    # The other half: "a" between ordinary words must not become a letter.
+    assert normalize("this is a check in with no traffic") == ""
+    assert "A" not in normalize("we have a runner down").split()
+
+
 def test_a_word_with_a_number_is_not_a_phonetic_weld() -> None:
     # "mile12" has no phonetic in it, so it stays one token. An unconditional
     # split on the letter/digit boundary would make a callsign-shaped "MILE".

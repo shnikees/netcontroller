@@ -11,7 +11,7 @@ the library is missing, and a fallback nobody exercises is a fallback that is
 broken. That job earned its keep immediately: the scipy-free high-pass turned
 out not to remove rumble at all, and is now a boxcar filter that does.
 
-378 tests, all offline, no audio hardware. About 20 seconds, most of it
+417 tests, all offline, no audio hardware. About 20 seconds, most of it
 the pipeline tests deliberately running a slow transcriber in real time.
 
 ## What each suite covers
@@ -98,6 +98,34 @@ python tools/bench_engines.py --audio net.wav --roster roster.csv \
 labelling it needs. Use `--repeat 5` and read the median: run-to-run spread on
 a laptop is around ten percent, enough to reverse a ranking by itself. Results
 so far are in [HARDWARE.md](HARDWARE.md).
+
+## Properties, for the misses that have not happened yet
+
+`test_matcher_properties.py` is the other half of the regression block below.
+Regressions record ways a callsign has *already* been mangled; the property
+suite generates callsigns, spells them with the same phonetic table the app
+uses, mutates them the way Whisper renders text, and asserts they survive.
+
+Two tiers, and the second is the point:
+
+- **Lossless renderings must still match.** Hyphenation, gluing, ordinals,
+  Roman numerals, a split "niner" -- these lose nothing, so a failure is a
+  normalizer bug.
+- **No rendering may ever produce a *different* roster callsign.** Coming back
+  unmatched is a disappointment; coming back as somebody else sends help to the
+  wrong part of the course.
+
+It needs no audio, no labelling and no `hypothesis` dependency -- generation is
+seeded, so a failure reproduces from its own output. It earned its place on the
+first run by finding a live bug: the letter **A**, arriving as a bare character
+in a collapsed suffix ("whiskey 6ABC"), was being read as the English article
+in `FILLER_WORDS`, dropped, and -- because a dropped word emits a `BREAK` --
+taking the rest of the callsign with it. Every callsign with an A in a
+collapsed suffix was affected, and no net had reported it.
+
+**When you add a normalizer rule, add its mutation here too.** That is what
+turns one fix into a property that holds for every callsign rather than the one
+in the bug report.
 
 ## Adding a regression
 

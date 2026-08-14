@@ -42,7 +42,7 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 378 offline tests run on every push across Python 3.11–3.13 plus a
+audio, with 417 offline tests run on every push across Python 3.11–3.13 plus a
 job with the optional libraries removed.
 
 | Area | What works |
@@ -57,6 +57,7 @@ job with the optional libraries removed.
 | Attendance | Who turns up, learned from past sessions, used to order the prompt |
 | Durability | Crash-safe transcripts, disk spill, `--resume`, watchdog with auto-restart |
 | Operation | Settings panel, health strip, corrections, export, container image |
+| Matching, generatively | Every roster callsign spelled, mutated the way Whisper renders text, and asserted to survive -- and never to come back as a different station |
 | Escalation | Queued lines badged *waiting* and counted on the strip; re-transcribed ones badged *2nd pass*, and never left stranded when a pass fails or is dropped |
 
 Some of it was verified in ways worth trusting:
@@ -232,22 +233,7 @@ features:
    playback, but the stored clips make either possible. The clips kept for
    voice enrolment already prove the storage side works.
 
-5. **Property-test the matcher instead of only regressing it.**
-   `_spell_phonetically()` already turns a callsign into its spoken form, so
-   every roster entry can be spelled, mutated with the *rendering* artifacts
-   Whisper is known to produce -- hyphenation, glued phonetics, ordinals, Roman
-   numerals, a split "niner" -- and asserted to still match. No audio and no
-   hand-labelling: the roster is the ground truth, as everywhere else here.
-   All four normalizer bugs fixed on 2026-08-12 were single mutations of that
-   kind, which is the argument for it -- regressions only record misses that
-   already happened.
-
-   The second half is mining `feedback.jsonl`: every operator correction is a
-   labelled pair of raw text and the right answer, so a tool could emit
-   ready-made regression cases and close the copy-paste loop TESTING.md
-   currently describes by hand.
-
-6. **Improve the logging logic.** Raised as a future item, not yet scoped.
+5. **Improve the logging logic.** Raised as a future item, not yet scoped.
    What exists today: `logging_setup.py` writes rotating application logs,
    `session_writer.py` writes the fsynced JSONL transcript that `--resume`
    reads back, and the export writes CSV and text at the end. The pieces work,
@@ -304,7 +290,7 @@ features:
    recorded. It also answers half the scoping question above — this is the
    transcript side, not the application logs.
 
-7. **Review after the net, not during it.** Everything self-supervised is in
+6. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards

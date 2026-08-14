@@ -335,7 +335,7 @@ def _split_alphanumeric(token: str) -> list[str]:
             if piece.isdigit() or piece in PHONETIC_MAP:
                 out.append(piece)
             elif len(piece) <= MAX_COLLAPSED_RUN:
-                out.extend(piece)  # spelled characters run together
+                out.extend(_spelled(piece))  # spelled characters run together
             else:
                 out.append(piece)
         return out
@@ -350,8 +350,26 @@ def _split_alphanumeric(token: str) -> list[str]:
     # A short mixed run is the model collapsing spelled-out characters
     # ("x-ray yankee" -> "XY"); splitting it back recovers them.
     if (leading or trailing) and len(token) <= 5:
-        return list(token)
+        return _spelled(token)
     return [token]
+
+
+def _spelled(chars: str) -> list[str]:
+    """Individual characters pulled out of a collapsed run, marked as letters.
+
+    Uppercased on purpose. Everything else in `tokenize` arrives lowercased and
+    is looked up as a *word*, and one of those lookups is `FILLER_WORDS` --
+    which contains "a". So the letter A, written by Whisper as part of a
+    collapsed suffix ("whiskey 6ABC"), was being read as the English article,
+    dropped, and -- because a dropped word emits a BREAK -- taking the rest of
+    the callsign with it: W6ABC came out as "W6 BC".
+
+    These characters are already known to be spelled letters, since they were
+    split out of a token that had a phonetic welded to it. Uppercasing says so,
+    and costs nothing: the word tables are all lowercase, so an uppercase token
+    falls straight through to being emitted as itself.
+    """
+    return [c.upper() if c.isalpha() else c for c in chars]
 
 
 def _split_hyphens(token: str) -> list[str]:
