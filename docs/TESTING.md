@@ -137,6 +137,55 @@ Those checks are skipped when no roster is present, so CI is unaffected.
 turns one fix into a property that holds for every callsign rather than the one
 in the bug report.
 
+## Learning from somebody else's net
+
+Everything measured here so far is synthesized speech, which is the largest
+caveat on every accuracy number in [HARDWARE.md](HARDWARE.md). A linked system
+— EchoLink or AllStarLink — is the cheapest way to fix that: hours of *real*
+operators saying *real* callsigns, with no radio, no antenna and no travel.
+Routing is in [AUDIO-INPUT.md](AUDIO-INPUT.md#feeding-audio-in-from-echolink-or-allstarlink).
+
+What that audio can and cannot teach splits along exactly the same line as the
+field loop — mis-*heard* against mis-*written*:
+
+**Safe to learn: renderings.** How Whisper writes a callsign it heard correctly
+— `9er`, `III`, `6ABC`, a hyphen welding two spelled words. Those are choices
+about text, made the same way whatever the audio path was, so a mutation added
+to `test_matcher_properties.py` from a linked net holds for your race net too.
+This is the high-value half, and one mutation covers every callsign.
+
+**Suspect: mishearings.** The link has a codec in it, and EchoLink's GSM 6.10
+is harsh. A phonetic mangled by 13 kbps GSM may be perfectly clear over a
+line-out cable, so an entry added to `PHONETIC_MAP` from it can loosen matching
+for no real gain — the same trap as the TTS artifacts below. Ask the same
+question: **would a human on a handheld into my radio produce this?**
+
+**Not safe at all: thresholds.** `vad.silence_ms`, `vad.aggressiveness`,
+`audio.gain` and `split.min_gap_ms` describe a signal path you are not going to
+use. Leave them at defaults until you have audio from your own radio, and do
+not run `tools/tune.py` against a linked recording — it will confidently
+measure the wrong channel.
+
+**Also useful, and often overlooked:** it exercises the whole pipeline for
+hours unattended. Backlog behaviour, memory, the watchdog, `--resume` — none of
+those need the audio to be representative, only continuous.
+
+### Keep the recordings out of the repository
+
+This repository is public, and a callsign resolves to a name and address in the
+FCC database. Real transcripts are therefore identifiable data about people who
+did not agree to being published.
+
+Record and analyse locally, and when a real transcript earns a place as a
+regression, **swap the callsign for a fictional one first**. The useful part is
+the mangled *text*, never the identity:
+
+```python
+# heard on a linked net as "kilo 7ABC"; callsign replaced
+def test_collapsed_suffix_keeps_the_a() -> None:
+    assert normalize("kilo 7ABC") == "K7ABC"
+```
+
 ## Adding a regression
 
 This is the main maintenance loop, and it is deliberately cheap. When a real

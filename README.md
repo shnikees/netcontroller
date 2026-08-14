@@ -59,7 +59,8 @@ session at the hardware.
 
 ## What it does
 
-- **Listens** to an SDR loopback, a radio's line output, or a microphone — one
+- **Listens** to an SDR loopback, a radio's line output, a microphone, or a
+  linked system over the internet (EchoLink/AllStar) — one
   receiver or several, each with its own level, VAD settings and health.
 - **Transcribes** each transmission with Whisper, conditioning the audio and
   biasing decoding toward the stations most likely to speak.

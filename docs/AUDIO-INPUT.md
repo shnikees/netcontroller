@@ -15,6 +15,7 @@ Any input works — the app does not care where the audio comes from:
 | **SDR loopback** | A monitor source fed by SDR++/GQRX | Best quality; audio never leaves the machine. Most setup. |
 | **Line in** | USB sound card or line input, fed from a radio's speaker or headphone jack | The practical choice for a handheld or mobile rig. Needs a cable and a level check. |
 | **Microphone** | Pointed at the radio's speaker | Fastest to set up, and works. The room is in the recording too, so expect more junk lines. |
+| **A linked system** | EchoLink or AllStarLink audio over the internet | No radio at all — see below. Excellent for gathering real speech, wrong for tuning thresholds. |
 
 ```bash
 python app.py --list-devices
@@ -96,3 +97,56 @@ the name.
 
 To hear the net yourself at the same time, use a combined sink or set the SDR
 app to duplicate its output — the monitor source does not consume the audio.
+
+
+## Feeding audio in from EchoLink or AllStarLink
+
+A linked system hands you demodulated audio over the internet, which is exactly
+what this app wants. There is **no new code path**: point the client at a null
+sink and put that sink's monitor in `audio.device`, the same as an SDR.
+
+```bash
+pactl load-module module-null-sink sink_name=link_sink \
+    sink_properties=device.description=LinkAudio
+```
+
+Then set the client's output to `LinkAudio`:
+
+- **AllStarLink** — the node is Asterisk with `app_rpt`. The simplest route is
+  a `USRP` or `pseudo` channel into ALSA/Pulse; on a node you already run,
+  point `simpleusb`/`usbradio`'s output at the sink instead of a radio.
+- **EchoLink** — `qtel` on Linux, or `svxlink` with its EchoLink module, both
+  of which are ordinary audio clients and can target the sink directly.
+
+Two things make this the *easiest* input to bring up:
+
+- **The audio is already gated.** A link only carries audio while somebody is
+  transmitting, so the squelch problem that eats an afternoon on an RTL-SDR
+  does not exist. Clip boundaries arrive nearly for free.
+- **No RF, no antenna, no overload.** Nothing to desense in a trailer full of
+  transmitters, because there is no receiver.
+
+**But do not tune anything on it.** The channel is not the one you will run on:
+
+| | Why it misleads |
+| --- | --- |
+| `vad.silence_ms`, `vad.aggressiveness` | The link's own gating and courtesy tones change the silence structure entirely |
+| `audio.gain`, `audio.channel` | A completely different level chain from a radio's line output |
+| `split.min_gap_ms` | Linked systems insert their own delays, so back-to-back stations behave nothing like they do on a simplex frequency |
+
+There is a codec in the path, and it matters which: **EchoLink is GSM 6.10**,
+about 13 kbps and harsh on speech detail; **AllStar is usually µ-law** and much
+kinder. Prefer AllStar where you have the choice.
+
+And it is the wrong *shape* of net. A linked weekly net is orderly and
+one-at-a-time; an event net is overlapping and fast. It will not stress the
+splitter or the backlog the way a race does.
+
+What it is genuinely good for — real human speech, and what to do with the
+recordings — is in [TESTING.md](TESTING.md#learning-from-somebody-elses-net).
+
+**Ask the group first.** Receiving and recording amateur transmissions is legal
+in the US and Part 97 does not prohibit it, but transcribing somebody's net is
+a courtesy question rather than a legal one. Most operators are enthusiastic
+once asked. Connecting a node purely to harvest audio without ever
+participating is the part people object to.
