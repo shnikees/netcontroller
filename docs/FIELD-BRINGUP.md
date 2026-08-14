@@ -5,7 +5,9 @@ audio. **The live SDR audio path has never run against real hardware.** This is
 the checklist for the first time it does. Work down it in order — each step
 isolates one thing, so when something fails you know what.
 
-Budget an hour, and do it on a day when there is *no* net you care about.
+Budget an hour, or two if the receiver is new to you — step 1 is outside the
+app and has its own ways to go wrong. Do it on a day when there is *no* net you
+care about.
 
 ## 0. Before you travel
 
@@ -32,7 +34,54 @@ since the model cache is the only thing that needs the network:
 python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')"
 ```
 
-## 1. Confirm the OS sees the audio
+## 1. Get the receiver producing audio
+
+Everything below assumes a receiver that is already demodulating. This step is
+outside the app entirely, and it is the one most likely to eat the afternoon.
+
+**An RTL-SDR dongle works, with caveats.** Anything RTL2832U-based (Nooelec
+NESDR SMArt, RTL-SDR Blog v3/v4) is supported by GQRX and SDR++ with no special
+driver. Two things are worth paying for: a **0.5 PPM TCXO**, because at 146 MHz
+a cheap 30 PPM part drifts about 4.4 kHz and narrowband FM starts sounding
+mushy, and an SMA connector so you can use a real antenna.
+
+**On Linux the kernel steals the dongle.** It binds as a DVB-T tuner, and the
+SDR app then reports the device as busy or does not list it at all. This is the
+single most common first-time failure:
+
+```bash
+echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/blacklist-rtl.conf
+```
+
+Unplug and replug afterwards. Install the `rtl-sdr` package as well for its
+udev rules, so the device opens without root. Confirm with `rtl_test -t` before
+starting any GUI: if that cannot open the device, neither will GQRX.
+
+**Set the squelch deliberately.** This matters more than any other setting here.
+`VadSegmenter` defaults to `aggressiveness: 3`, chosen for a *squelched*
+receiver feed. Point an open squelch at it and the hiss between transmissions
+looks enough like speech to open clips continuously — you get a stream of junk
+lines and no obvious cause. In GQRX and SDR++ the squelch is software: set it
+with the frequency idle, just above the noise floor, and confirm the audio
+meter sits at zero between transmissions.
+
+Also set **NFM** (not WFM) with a filter around 12 kHz, and turn any noise
+reduction *off* — it is tuned for human ears and removes exactly the detail the
+model uses.
+
+**A real radio's line output is usually the better primary.** An RTL-SDR has no
+preselector and an 8-bit ADC, so nearby transmitters desense and overload it —
+and a race trailer with several operators keying up a few feet away is close to
+the worst case. Taking line-out from an HT or mobile gives a proper front end
+and hardware squelch, and the app treats a line input as a first-class source.
+A sensible split is the radio on the repeater (the frequency being monitored)
+and the dongle on the stage or simplex frequency, where overload matters less.
+
+**If SDR++ or GQRX shares the machine with the app**, remember it has real CPU
+cost of its own. Watch `speed` on the status strip during step 8 rather than
+assuming one box covers both.
+
+## 2. Confirm the OS sees the audio
 
 With SDR++/GQRX running and receiving:
 
@@ -60,7 +109,7 @@ python app.py --list-devices
 seeing PulseAudio. Check that `libportaudio2` is installed and that you are not
 inside a container without the socket mounted.
 
-## 2. Confirm audio is actually flowing
+## 3. Confirm audio is actually flowing
 
 The most common failure is a device that exists but carries silence — the SDR
 app's output is going somewhere else. Record five seconds and look at it:
@@ -83,7 +132,7 @@ print(f'peak={abs(a).max()} rms={np.sqrt((a.astype(float)**2).mean()):.0f}')"
 
 Aim for peaks around a third to half of full scale on normal speech.
 
-## 3. First live capture
+## 4. First live capture
 
 ```bash
 python app.py -v
@@ -95,7 +144,7 @@ for this step. You are looking for one `INFO net-stt:` line per transmission.
 **Nothing appears at all:**
 - Squelch open with hiss reaching the app? `vad.aggressiveness: 3` is
   deliberately harsh — try 1 or 2.
-- Check the level from step 2 again.
+- Check the level from step 3 again.
 
 **Every squelch tail produces a junk line:** raise `vad.min_clip_ms` to 600–800.
 
@@ -110,7 +159,7 @@ Tune this against a *recording* of your net rather than live traffic if you can
 — record 10 minutes with `parecord`, then iterate with `--file`. Each pass is
 seconds instead of a week.
 
-## 4. Check latency
+## 5. Check latency
 
 Time from end-of-transmission to the line appearing. A few seconds is fine; a
 net moves slower than that.
@@ -124,7 +173,7 @@ Lateness is no longer data loss: a slow machine makes lines arrive late and
 flagged, not missing. But a net that is permanently behind is still worth
 fixing.
 
-## 5. If you run more than one receiver
+## 6. If you run more than one receiver
 
 Bring each one up **on its own first**, using the steps above with only that
 source enabled. Two receivers failing at once is much harder to diagnose than
@@ -140,7 +189,7 @@ is the default view — put the repeater there. Watch for:
 - The health dot on each tab. A source that never opened shows there, not just
   in the banner.
 
-## 6. Check the matcher against your real roster
+## 7. Check the matcher against your real roster
 
 This is where the interesting failures are, and the reason the vocabulary
 tables exist. Have a few known stations check in and watch the callsign column.
@@ -169,7 +218,7 @@ splits those into separate lines when it can hear real dead air between them
   shorter than the threshold. Lower it, or lower `vad.silence_ms` so the VAD
   separates them before the splitter has to.
 
-## 7. Run a real net
+## 8. Run a real net
 
 Keep a paper log the first time, and compare afterwards.
 

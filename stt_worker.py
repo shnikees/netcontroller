@@ -68,7 +68,7 @@ class Transcription:
 class SttWorker:
     """Lazily-loaded faster-whisper model.
 
-    model_size: tiny/base/small/medium/large-v3. See the README for the
+    model_size: tiny/base/small/medium/large-v3. See docs/ACCURACY.md for the
         latency/accuracy tradeoff; `base` is the default because it keeps up on
         a laptop CPU while a net is running.
     device: "cpu", "cuda", or "auto" to use CUDA when it is available.

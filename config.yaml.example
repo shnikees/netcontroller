@@ -87,7 +87,7 @@ split:
 whisper:
   # tiny | base | small | medium | large-v3
   # base is the default: it keeps up on a laptop CPU during a live net.
-  # See the README table before moving up.
+  # See docs/ACCURACY.md before moving up.
   model_size: base
   # cpu | cuda | auto (auto uses CUDA when ctranslate2 reports a device)
   device: auto
