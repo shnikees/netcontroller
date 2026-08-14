@@ -35,7 +35,7 @@ Lines that declared traffic are badged, and the stations holding it are marked
 in the sidebar — the header count is also a filter. Stations the roster cannot
 match are flagged amber rather than attached to the nearest plausible callsign — a wrong callsign is a wrong location. Clicking one
 sets the right station, and the app
-[learns the correction](#corrections-and-what-the-app-learns-from-them) for
+[learns the correction](docs/MATCHING.md#corrections-and-what-the-app-learns-from-them) for
 next time. (Screenshot uses the example roster and synthesised audio from
 `tools/make_test_audio.py`.)
 

@@ -9,7 +9,7 @@ happens when something breaks mid-net.
 
 - Matched stations in bold green; unmatched lines flagged amber with the
   callsign that was heard. Click any callsign to fix it — the app
-  [learns the correction](#corrections-and-what-the-app-learns-from-them).
+  [learns the correction](MATCHING.md#corrections-and-what-the-app-learns-from-them).
 - **A tab per receiver** when you run more than one, with the first configured
   source as the default view, a health dot per tab, and an unread count so a
   check-in on another frequency is not missed. An **All** tab interleaves them.
@@ -206,15 +206,15 @@ The settings that actually matter in the field:
 | `vad.silence_ms` | 800 | Lower if stations run together; raise if one check-in splits into several lines. 800 ms survives the pauses in a phonetically spelled callsign. |
 | `vad.min_clip_ms` | 400 | Raise if squelch tails and kerchunks are producing junk lines. |
 | `vad.aggressiveness` | 3 | Lower to 1–2 if quiet stations are being missed entirely. |
-| `roster.threshold` | 78 | Raise for fewer wrong matches, lower for fewer "unmatched" lines. See below. |
-| `whisper.model_size` | base | See the table below. |
+| `roster.threshold` | 78 | Raise for fewer wrong matches, lower for fewer "unmatched" lines. See [MATCHING.md](MATCHING.md#tuning-it-for-your-net). |
+| `whisper.model_size` | base | See [ACCURACY.md](ACCURACY.md#choosing-a-model). |
 | `split.min_gap_ms` | 500 | Raise if a station naming another is logged as two check-ins; lower if back-to-back stations are merged into one line. |
 | `audio.gain` | 1.0 | Line in and mic only — a level that is too low costs accuracy. Per source when you have several. |
 | `transcripts.live` | true | Leave on. It is what makes a crash cost nothing. |
 
 Everything under `vad:` can also be set **per source**, which is what you want
 when a strong repeater and a weak simplex receiver share one app — see
-[Multiple receivers](#multiple-receivers).
+[Multiple receivers](AUDIO-INPUT.md#multiple-receivers).
 
 ## Running in a container
 
