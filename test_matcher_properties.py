@@ -45,8 +45,10 @@ running in the minimal-dependency CI job.
 
 from __future__ import annotations
 
+import os
 import random
 import string
+from pathlib import Path
 
 import pytest
 from rapidfuzz import fuzz
@@ -57,6 +59,7 @@ from callsign_match import (
     _spell_phonetically,
     CallsignMatcher,
     RosterEntry,
+    load_roster,
     normalize,
 )
 
@@ -307,3 +310,75 @@ def test_the_generated_roster_is_actually_hard() -> None:
         for p, _, s in (_parts(c) for c in a_roster(size=120, seed=SEED))
     }
     assert shapes == {(a, b) for a in (1, 2) for b in (1, 2, 3)}
+
+
+# --------------------------------------------------------------------------
+# The same properties, against the roster you actually run
+#
+# Generated callsigns are deliberately spread out. A real roster is not: event
+# nets collect callsigns that genuinely resemble each other, and that is worth
+# knowing about *before* the net rather than during it. Skipped when there is
+# no roster to read, so CI is unaffected.
+# --------------------------------------------------------------------------
+
+REAL_ROSTER = Path(os.environ.get("NETCONTROLLER_ROSTER", "roster.csv"))
+
+real_roster_only = pytest.mark.skipif(
+    not REAL_ROSTER.exists(), reason=f"no roster at {REAL_ROSTER}"
+)
+
+
+def _real() -> tuple[CallsignMatcher, list[str]]:
+    entries = load_roster(REAL_ROSTER)
+    return CallsignMatcher(roster=entries), [e.callsign for e in entries]
+
+
+@real_roster_only
+def test_your_roster_is_never_misattributed() -> None:
+    """The property that must hold whatever your roster looks like.
+
+    Two similar callsigns may be impossible to tell apart -- that is a fact
+    about the roster, and the matcher is meant to refuse. What it must never do
+    is pick the wrong one.
+    """
+    matcher, roster = _real()
+    wrong = [
+        f"    {callsign} came back as {result.callsign} from {mutate.__name__}"
+        for callsign in roster
+        for mutate in LOSSLESS
+        for result in [matcher.match(mutate(callsign))]
+        if result.matched and result.callsign != callsign
+    ]
+    assert not wrong, "\n" + "\n".join(wrong[:12])
+
+
+@real_roster_only
+def test_your_roster_survives_every_rendering() -> None:
+    """Which of your stations the matcher can recover from any rendering.
+
+    Callsigns with a close neighbour on the roster are reported rather than
+    failed: refusing to guess between two similar stations is correct, and the
+    useful output is *which* stations those are, so net control knows which
+    ones will need confirming by ear.
+    """
+    matcher, roster = _real()
+    ambiguous = {
+        c for c in roster
+        if any(fuzz.ratio(c, o) >= MAX_ROSTER_SIMILARITY for o in roster if o != c)
+    }
+    failures = [
+        f"    {callsign}: {mutate.__name__} -> {result.callsign or result.reason}"
+        for callsign in roster
+        if callsign not in ambiguous
+        for mutate in LOSSLESS
+        for result in [matcher.match(mutate(callsign))]
+        if result.callsign != callsign
+    ]
+    if ambiguous:
+        print(
+            f"\n{len(ambiguous)} callsign(s) on this roster are close enough to "
+            f"another that the matcher will refuse rather than guess, and net "
+            f"control should expect to confirm them by ear:\n    "
+            + ", ".join(sorted(ambiguous))
+        )
+    assert not failures, "\n" + "\n".join(failures[:12])

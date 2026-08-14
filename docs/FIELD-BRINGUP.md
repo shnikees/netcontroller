@@ -195,13 +195,45 @@ This is where the interesting failures are, and the reason the vocabulary
 tables exist. Have a few known stations check in and watch the callsign column.
 
 For each miss, capture the *exact* transcript text from the log line — the
-`raw_text` field, verbatim — and follow the workflow in
-[TESTING.md](TESTING.md#adding-a-regression). It is a two-line change plus a
-test, and it makes that mis-transcription permanently handled.
+`raw_text` field, verbatim. Then ask one question before writing anything,
+because it decides whether you fix one callsign or all of them:
+
+**Did the model mis-*hear* it, or mis-*write* it?**
+
+- **Mis-heard** — it produced a word nobody said: `Fictor` for victor, `KELO`
+  for kilo. Add the spelling to the tables in `callsign_match.py` and a
+  regression, per [TESTING.md](TESTING.md#adding-a-regression). This fixes that
+  one mishearing.
+- **Mis-written** — the words are right and the *rendering* is odd: `9er` for
+  niner, `III` for three, `6ABC` for a spelled suffix, a hyphen welding two
+  words. Fix it in the splitters, then **add the mutation to
+  `test_matcher_properties.py`** — see
+  [TESTING.md](TESTING.md#properties-for-the-misses-that-have-not-happened-yet).
+  This fixes it for *every* callsign on the roster, including the forty you did
+  not hear today.
+
+The second kind is worth the extra two minutes. Whisper renders text the same
+way whoever is speaking, so one mutation added in the trailer covers the whole
+roster — and the letter-A bug found by that suite had broken every callsign
+with an A in a collapsed suffix without any net noticing.
 
 Expect the first real net to surface several. That is the system working as
 intended: the roster is what corrects Whisper, and the tables are what teach it
 your net's specific failure modes.
+
+Before you pack up, run the properties against **your** roster rather than the
+generated one. It applies every rendering above to all of your stations, which
+is the check a mutation added in the field is worth confirming with:
+
+```bash
+python -m pytest test_matcher_properties.py test_callsign_match.py -q -s
+```
+
+It picks up `roster.csv` automatically (`NETCONTROLLER_ROSTER=path` for another
+one) and skips if there is none. Two things come out of it: nothing on your
+roster may ever be misattributed to another station, and it prints any
+callsigns close enough to each other that the matcher will refuse rather than
+guess — the stations net control should expect to confirm by ear.
 
 **If a station matches the *wrong* roster entry**, that is more serious than an
 unmatched line. Raise `roster.threshold` or `roster.ambiguity_margin` and file

@@ -123,6 +123,16 @@ in `FILLER_WORDS`, dropped, and -- because a dropped word emits a `BREAK` --
 taking the rest of the callsign with it. Every callsign with an A in a
 collapsed suffix was affected, and no net had reported it.
 
+It also runs against a real roster when there is one, which generated
+callsigns cannot substitute for — event nets collect callsigns that genuinely
+resemble each other:
+
+```bash
+python -m pytest test_matcher_properties.py -q -s   # uses roster.csv if present
+```
+
+Those checks are skipped when no roster is present, so CI is unaffected.
+
 **When you add a normalizer rule, add its mutation here too.** That is what
 turns one fix into a property that holds for every callsign rather than the one
 in the bug report.
