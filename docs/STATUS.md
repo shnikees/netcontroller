@@ -290,11 +290,49 @@ features:
    of whisper.cpp ships a `parakeet-cli`, so the Parakeet half of this item can
    be tested through the same binary rather than a second stack.
 
-3. **Make matching source-aware.** Per-frequency rosters currently bias
+3. **Improve callsign recovery on real audio.** The whole point, and now the
+   best-evidenced gap. Ranked by what the real-audio result predicts, not by
+   effort. The first two need no roster and no hardware.
+
+   **Engines to try, and why each is a real test rather than a shopping list:**
+
+   | Candidate | The prediction it tests |
+   | --- | --- |
+   | **Parakeet TDT 0.6b** | A transducer with a far weaker internal language model. If "more language model, worse callsigns" is the mechanism, this should *invert* the trend rather than continue it. `whisper.cpp` already builds `parakeet-cli`, so it is one model download away |
+   | **`large-v3-turbo`** | Full large encoder, decoder distilled from 32 layers to 4 — strong acoustics, weak language model. The hypothesis predicts it *beats* `medium` despite being nominally bigger, which is a falsifiable claim worth having |
+   | **A pure CTC model** (wav2vec2) | No language model at all. The extreme end, which bounds the size of the effect. A one-off experiment rather than a candidate engine, since it drags in torch |
+   | `large-v3` | Only to confirm the decline continues. Expensive, and the trend already predicts the answer |
+
+   **Levers that are not the model, and are probably worth more:**
+
+   - **`hotwords`.** faster-whisper supports it, and it is a *different*
+     mechanism from `initial_prompt` -- it biases the decoder directly rather
+     than seeding it with text. The prompt alone roughly doubled recovery, so
+     this is the cheapest untested lever there is.
+   - **Confusion-aware matching.** The near-misses are not random: `KG7RIB` for
+     `KJ7RAB` is G↔J and I↔A, and `KG7JX` for `KJ7JXM` is G↔J again. Whisper's
+     errors are *acoustically structured*, and `fuzz.ratio` treats every
+     substitution as equally bad, so a two-character acoustic confusion scores
+     the same as two arbitrary wrong letters. A distance weighted by how
+     confusable letters are over FM would score the real confusions far higher
+     **without** loosening the threshold for genuinely different callsigns.
+     This attacks the measured failure mode directly, helps whatever engine
+     wins, and is a matcher change rather than a compute change.
+   - **Multi-pass agreement.** Accept a callsign only where two passes agree --
+     the same model at two temperatures, or two different engines. Buys
+     precision, and precision is what would let the threshold drop far enough
+     to catch the near-misses safely.
+   - **A real roster.** Still the largest single lever measured, and still the
+     one thing here that cannot be done without a human.
+
+   **Measuring any of it needs a denominator.** Twenty clips listened to and
+   written down by hand turns every number above from relative into absolute.
+
+4. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
    would cut wrong matches on a 100-station roster — carefully, since people do
    turn up on the other frequency.
-4. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
+5. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
    The appeal is settling "what did they actually say" when the transcript
    itself is in doubt — but a race trailer already has several people talking,
    and playing a clip back into that room adds to the problem it is meant to
@@ -305,7 +343,7 @@ features:
    playback, but the stored clips make either possible. The clips kept for
    voice enrolment already prove the storage side works.
 
-5. **Improve the logging logic.** Raised as a future item, not yet scoped.
+6. **Improve the logging logic.** Raised as a future item, not yet scoped.
    What exists today: `logging_setup.py` writes rotating application logs,
    `session_writer.py` writes the fsynced JSONL transcript that `--resume`
    reads back, and the export writes CSV and text at the end. The pieces work,
@@ -362,7 +400,7 @@ features:
    recorded. It also answers half the scoping question above — this is the
    transcript side, not the application logs.
 
-6. **Review after the net, not during it.** Everything self-supervised is in
+7. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards
