@@ -86,9 +86,10 @@ Some of it was verified in ways worth trusting:
 
 ## What real audio has now shown
 
-Two and a half hours of a live repeater went through the pipeline on
-2026-08-16. Four things came out of it that no amount of synthetic audio would
-have:
+About five hours of a live repeater went through the pipeline on 2026-08-16,
+and a member of that net confirmed three callsigns on it -- `KJ7RAB`,
+`KJ7JXM`, `KI7RMU` -- which is the first ground truth this project has had.
+Six things came out of it that no amount of synthetic audio would have:
 
 - **An open-squelch feed did not segment at all.** webrtcvad called 74% of the
   recording speech at *every* aggressiveness, because the gaps between overs
@@ -104,9 +105,22 @@ have:
 - **People do not use phonetics on a conversational net.** They say "kay jay
   seven jay ex em", which produced no candidate at all, and mixed renderings
   silently dropped the prefix while matching on the remainder.
+- **A bigger model recovered *fewer* callsigns.** Over a 30-minute slice with
+  the three known stations in the prompt, `base` recovered 16, `small` 11 and
+  `medium` 7 -- monotonically worse as the model grows, and the exact opposite
+  of the synthetic benchmark where `medium` scored full marks. A larger model
+  is a more confident language model, and a callsign is not language. See
+  [HARDWARE.md](HARDWARE.md), which now leads with this.
+- **The roster prompt outweighs everything else measured.** The same recordings
+  processed *without* the known callsigns in the prompt yielded 8 recoveries
+  across four hours; with them, 16 in twenty-four minutes. The token budgeting
+  in `stt_worker.py` is doing more work than any model upgrade on offer.
 
-What it has *not* shown is whether any of it is accurate. There is no roster
-for that net, so there is no ground truth -- only output that looks plausible.
+What it still has *not* shown is recall. Three confirmed callsigns is enough to
+compare models against each other, but nobody has counted how many times those
+stations actually identified, so "16 recovered" has no denominator. The cheapest
+way to get one is somebody listening to twenty clips and writing down what they
+hear.
 
 ## Not proven: the live audio path
 
@@ -163,7 +177,7 @@ two candidates are indistinguishable on the audio you gave it.
 | `vad.aggressiveness` | 3 | How much hiss your receiver passes between transmissions |
 | `split.min_gap_ms` | 500 | The gap between two stations keying up, versus a pause mid-sentence |
 | `voice.min_similarity` | 0.82 | How alike two recordings of one operator look over FM |
-| `escalation.min_confidence` | 0.55 | Where "unsure" begins for your audio |
+| `escalation.min_confidence` | 0.55 | Where "unsure" begins for your audio. Note that escalation itself is now in doubt: on real audio no larger model beat `base` at callsign recovery |
 | `audio.gain` | 1.0 | Entirely dependent on what you plugged into what — measured, not searched: `tune.py` reads the level and solves for it |
 | `traffic` phrasing | — | The phrase tables assume how *your* net announces traffic. Wrong wording shows up as missing badges, not wrong ones |
 | `attendance.DECAY` | 0.85 | How fast a crew turns over between events |
@@ -188,7 +202,13 @@ None of them needs hand-labelling: the roster is the supervision throughout.
 ## Off by default, waiting on a decision
 
 - **`escalation.enabled`** — loads a second, larger model. Real memory, so it
-  is opt-in. Turn it on where you have the RAM or a GPU.
+  is opt-in, and it should now stay off until somebody shows it helps. The
+  premise was that a bigger model rescues the lines a small one fumbled; on the
+  only real audio measured, every bigger model recovered *fewer* callsigns than
+  `base`. The mechanism is intact and worth keeping -- re-transcribing the
+  unsure lines in the gaps is still the right shape -- but the model it
+  escalates *to* is now an open question rather than an obvious one. A
+  different engine may be the answer where a bigger Whisper is not.
 - **`voice.enabled`** — needs a net or two of enrolment before it suggests
   anything, and its threshold needs tuning against real voices.
 
@@ -242,10 +262,13 @@ features:
    links its repeaters for one on Monday evenings and it is on the same
    stream.
 
-2. **Benchmark alternatives to Whisper.** The highest-value item under "cycles
-   go to transcription": Parakeet is faster *and* scores better on English, so
-   it buys accuracy and headroom at the same time rather than trading one for
-   the other. Riva adds real *word boosting*, which is a proper answer to the
+2. **Benchmark alternatives to Whisper.** Promoted in importance by the real-
+   audio result: if a bigger Whisper makes callsign recovery *worse*, then more
+   compute spent on Whisper is not the lever, and the interesting question is
+   whether a different architecture behaves differently on strings that are not
+   language. Parakeet is faster *and* scores better on English, so it buys
+   accuracy and headroom at the same time rather than trading one for the
+   other. Riva adds real *word boosting*, which is a proper answer to the
    224-token prompt ceiling instead of the packing heuristic in use now — and
    with 40-100 stations across two frequencies, that ceiling is a live
    constraint rather than a theoretical one.
