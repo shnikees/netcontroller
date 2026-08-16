@@ -5,9 +5,11 @@ note and became an argument.
 
 The short version, and it is genuinely the conclusion rather than a hedge:
 **measure before buying, because the measurement keeps saying you do not need
-to buy anything.** On the test net below, `base` with a fixed normalizer scores
-the same as `medium` — and `base` runs in real time on hardware you already
-own.
+to buy anything.** On synthetic audio `base` matches `medium`. On the one real
+net measured so far it *beats* both `small` and `medium`, recovering more than
+twice the callsigns `medium` did for a third of the compute. Either way `base`
+runs comfortably on hardware you already own, and the case for spending money
+on a bigger model has got weaker every time it has been measured.
 
 ## Measure, then buy
 
@@ -19,10 +21,12 @@ strip, transcription time over audio length.
    `base` and read `speed` off the strip. Under about 0.5× there is headroom
    for a bigger model; near 1.00× there is not. That measurement costs nothing
    and answers the question better than any table here.
-2. **Remember what escalation changes.** The big model only handles the lines
-   the fast one was unsure about, in the gaps — so "can it run `large-v3` on
-   every transmission" is the wrong question. `base` live with `small` or
-   `medium` escalating is a much cheaper target.
+2. **Remember what escalation changes** -- and check that it helps at all. The
+   big model only handles the lines the fast one was unsure about, in the gaps,
+   so "can it run `large-v3` on every transmission" is the wrong question. But
+   on real audio neither `small` nor `medium` recovered more callsigns than
+   `base`, so a second pass with a bigger model is currently a cost with no
+   demonstrated benefit. Measure it on your own net before turning it on.
 3. **Only then buy**, and buy for the measurement rather than the spec sheet.
 
 `tools/bench_engines.py` is the tool for step 1. It cuts a recording into clips
@@ -33,9 +37,56 @@ flattering an engine with one long file:
 python tools/bench_engines.py --audio net.wav --roster roster.csv --repeat 5
 ```
 
-## Measured: engines and model sizes
+## Measured on real audio, which inverts the result below
 
-18 synthetic event-net transmissions (86 s of speech from
+Everything in the next section is synthetic speech. On 2026-08-16 the same
+question was put to a real repeater: a 30-minute slice of a live net, 105
+transmissions, 24.3 minutes of speech, segmented by the app's own VAD. Three
+callsigns on that net are confirmed by a member of it, so "recovered" counts
+transmissions where the matcher returned one of those three. All three were in
+the prompt, as they would be in service.
+
+| Model | Compute | Realtime | Callsigns recovered | Near-misses refused |
+| --- | --- | --- | --- | --- |
+| **`base`** | 200 s | 0.137× | **16** | 11 |
+| `small` | 316 s | 0.217× | 11 | 5 |
+| `medium` | 686 s | 0.470× | 7 | 6 |
+
+**Recovery falls as the model grows, and the fall is steep** -- `medium`
+recovers under half what `base` does for three and a half times the compute.
+That is the opposite of the synthetic result below, where `medium` scored
+full marks.
+
+The likely mechanism is the one already suspected of `small`: a larger model is
+a more confident language model, and a callsign is not language. Given noisy
+audio and an unusual string, `base` writes something literal and
+callsign-shaped, while `medium` writes fluent English -- and fluent English is
+where the callsign goes to die. That the effect scales with model size is
+consistent with it being a property of the language model rather than of the
+acoustics.
+
+**What this does and does not settle.** One net, one slice, three callsigns, no
+ground truth for how many times those stations actually identified -- so this
+measures *relative* recovery, not recall. It is nowhere near enough to conclude
+that bigger models are worse in general, and `medium` may well transcribe the
+*conversation* better while losing the callsign. But it is real audio, and it
+is enough to stop the synthetic table below being used to justify buying
+hardware to run a bigger model.
+
+**Consequences worth acting on:**
+
+- The advice elsewhere to escalate to `medium` rather than `small` is not
+  supported by this. On real audio `base` beat both.
+- A GPU bought to run `large-v3` live would, on this evidence, buy worse
+  callsign recovery. Re-run this measurement before spending anything.
+- The roster prompt matters more than the model. An earlier pass over the same
+  recordings *without* the known callsigns in the prompt found 8 recoveries
+  across four hours; this pass found 16 in twenty-four minutes.
+
+## Measured on synthetic speech: engines and model sizes
+
+**Read the real-audio section above first -- these numbers point the other
+way.** 18 synthetic event-net transmissions (86 s of speech from
 `tools/make_test_audio.py`), cut into clips by the VAD, beam 5, roster prompt.
 Apple M1 Pro, 10 core, median of five runs. `ok` counts transmissions where the
 project's own matcher recovered the correct roster callsign.
@@ -85,8 +136,10 @@ equipment" — which is precisely the wrong instinct for this input, and a
 failure `base` is too literal to make.
 
 **This matters for a default:** `escalation.model_size` is currently `small`,
-which on this evidence is the worst available choice. If a real net reproduces
-this, escalation should go straight to `medium`.
+which on this evidence is the worst available choice. A real net has now
+reproduced the `small` result -- and gone further, putting `medium` below it
+too. Escalating to a bigger model is not currently supported by any real-audio
+measurement.
 
 ### Nothing produced a wrong callsign
 
@@ -214,7 +267,7 @@ Cheapest first, with what each tier buys given the measurements above:
 
 | Spend | What it buys |
 | --- | --- |
-| **Nothing** | `base` on the existing machine. On this test net that is already full accuracy — start here and stay unless a real net says otherwise |
+| **Nothing** | `base` on the existing machine. Full accuracy on the synthetic net, and the best of the three models on the real one — start here, and note that a real net has now been asked and did not say otherwise |
 | ~$520–610 | AMD mini PC (780M). Quiet, low power, and an accelerator if the engine changes |
 | ~$700–1,000 | Used RTX or AMD gaming laptop. Adds a built-in UPS, which in a trailer on a generator is worth more than the speed |
 | ~$1,000+ | RTX A2000 12 GB in a box that already exists, at 70 W |
