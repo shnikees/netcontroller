@@ -22,6 +22,8 @@ so the tests are about survival under backlog, not about happy paths.
 from __future__ import annotations
 
 import threading
+import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -249,3 +251,46 @@ def test_write_failure_is_reported_not_raised(tmp_path) -> None:
     target.write_text("not a directory")
     spill = SpillStore(target / "spill")
     assert spill.write(clip_audio(0.5), 0, 100, 1) is None
+
+
+# --------------------------------------------------------------------------
+# Draining the backlog at the end of a batch replay
+# --------------------------------------------------------------------------
+
+
+def test_batch_waits_for_a_slow_transcriber_rather_than_a_clock() -> None:
+    """The bug this replaces: a fixed 30 s deadline silently abandoned 185 of
+    223 clips from a 75-minute net and still exited successfully."""
+    import threading
+
+    import app as app_module
+
+    remaining = [40]
+    fake = SimpleNamespace(
+        _clips=SimpleNamespace(qsize=lambda: remaining[0]),
+        spill=SimpleNamespace(pending=lambda: 0),
+    )
+
+    def work():
+        # Slower than any fixed timeout would allow, but always progressing.
+        for _ in range(40):
+            time.sleep(0.02)
+            remaining[0] -= 1
+
+    threading.Thread(target=work, daemon=True).start()
+    left = app_module.Pipeline.drain_backlog(fake, stall_seconds=2.0)
+    assert left == 0, "gave up on a backlog that was still shrinking"
+
+
+def test_batch_gives_up_only_when_nothing_is_moving() -> None:
+    """A transcriber that has died must not hang the run forever."""
+    import app as app_module
+
+    fake = SimpleNamespace(
+        _clips=SimpleNamespace(qsize=lambda: 7),
+        spill=SimpleNamespace(pending=lambda: 0),
+    )
+    started = time.monotonic()
+    left = app_module.Pipeline.drain_backlog(fake, stall_seconds=0.5)
+    assert left == 7
+    assert time.monotonic() - started < 5

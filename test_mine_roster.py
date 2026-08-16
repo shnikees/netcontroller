@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import time
 import sys
 from pathlib import Path
 
@@ -137,3 +138,42 @@ def test_grid_distance_is_roughly_right() -> None:
     seattle_to_vegas = km_apart("CN87", "DM26")
     assert 1300 < seattle_to_vegas < 1800, seattle_to_vegas
     assert km_apart("CN87", "") is None
+
+
+# --------------------------------------------------------------------------
+# The batch wrapper
+# --------------------------------------------------------------------------
+
+
+def test_a_recording_still_being_written_is_left_alone(tmp_path) -> None:
+    """A capture in progress looks exactly like a finished one until you notice
+    the file is still growing. Transcribing it would produce a truncated
+    session that then looks like a complete net."""
+    sys.path.insert(0, str(Path(__file__).parent / "tools"))
+    from batch_process import still_being_written
+
+    fresh = tmp_path / "now.wav"
+    fresh.write_bytes(b"\0" * 1000)
+    assert still_being_written(fresh)  # just touched
+
+    import os
+    old = tmp_path / "finished.wav"
+    old.write_bytes(b"\0" * 1000)
+    stale = time.time() - 3600
+    os.utime(old, (stale, stale))
+    assert not still_being_written(old)
+
+
+def test_the_manifest_stops_a_recording_being_counted_twice(tmp_path) -> None:
+    """Re-processing nightly would double-count every station in the mining
+    that follows, which is the one number the roster draft depends on."""
+    import json as _json
+
+    manifest = tmp_path / ".batch-processed.json"
+    manifest.write_text(_json.dumps({"already.wav": {"session": "net-01.jsonl"}}))
+    (tmp_path / "already.wav").write_bytes(b"\0")
+    (tmp_path / "new.wav").write_bytes(b"\0")
+
+    done = _json.loads(manifest.read_text())
+    waiting = sorted(p.name for p in tmp_path.glob("*.wav") if p.name not in done)
+    assert waiting == ["new.wav"]

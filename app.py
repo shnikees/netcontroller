@@ -503,6 +503,35 @@ class Pipeline:
             time.sleep(0.2)
         return self._clips.qsize() + self.spill.pending()
 
+    def drain_backlog(self, stall_seconds: float = 180.0, on_progress=None) -> int:
+        """Wait for the whole backlog, giving up only if nothing is moving.
+
+        `drain` takes a wall-clock deadline, which is right at shutdown: an
+        operator closing the app wants it closed. It is wrong for a batch
+        replay, where the queue spilling to disk is *by design* -- the file is
+        read far faster than it can be transcribed -- and a fixed timeout
+        silently throws away whatever did not fit in time. A 75-minute net came
+        back as 34 lines out of 223 clips, 185 of them left in the spill
+        directory, and the process still exited zero.
+
+        So this waits on *progress* rather than on the clock, and only gives up
+        if the backlog has not shrunk for a long while, which means the
+        transcriber has died rather than that it is slow.
+        """
+        previous = None
+        last_change = time.monotonic()
+        while True:
+            pending = self._clips.qsize() + self.spill.pending()
+            if pending == 0:
+                return 0
+            if pending != previous:
+                if on_progress is not None and previous is not None:
+                    on_progress(pending)
+                previous, last_change = pending, time.monotonic()
+            elif time.monotonic() - last_change > stall_seconds:
+                return pending
+            time.sleep(0.5)
+
     # -- settings changed while running ------------------------------------
 
     def apply_setting(self, path: str, value) -> None:
@@ -1179,7 +1208,19 @@ async def run(
             while any(source._thread and source._thread.is_alive()
                       for source in pipeline.sources):
                 await asyncio.sleep(0.2)
-            await asyncio.to_thread(pipeline.drain, config.buffering.drain_timeout_s)
+
+            def report(pending: int) -> None:
+                if pending % 25 == 0:
+                    log.info("Transcribing backlog: %d clip(s) left", pending)
+
+            left = await asyncio.to_thread(pipeline.drain_backlog, 180.0, report)
+            if left:
+                log.error(
+                    "Gave up with %d clip(s) untranscribed -- the transcriber "
+                    "stopped making progress. They remain in %s",
+                    left,
+                    config.buffering.spill_dir,
+                )
             log.info("Batch run complete: %d line(s)", len(store.entries))
             server.should_exit = True
 
