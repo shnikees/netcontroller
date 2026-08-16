@@ -41,9 +41,13 @@ handled in the rally deployment app instead.
 
 ## Proven
 
-Everything downstream of the audio device, against recorded and synthesised
-audio, with 437 offline tests run on every push across Python 3.11–3.13 plus a
-job with the optional libraries removed.
+Everything downstream of the audio device, with 442 offline tests run on every
+push across Python 3.11–3.13 plus a job with the optional libraries removed.
+
+**As of 2026-08-16 that includes real human audio**: about two and a half hours
+of a live repeater, pulled off a club's public stream. Not a radio plugged into
+this machine, but real operators on a real net rather than a synthesizer, which
+is the thing every earlier number was caveated on.
 
 | Area | What works |
 | --- | --- |
@@ -59,6 +63,9 @@ job with the optional libraries removed.
 | Durability | Crash-safe transcripts, disk spill, `--resume`, watchdog with auto-restart |
 | Operation | Settings panel, health strip, corrections, export, container image |
 | Matching, generatively | Every roster callsign spelled, mutated the way Whisper renders text, and asserted to survive -- and never to come back as a different station |
+| Spelling without phonetics | Letter names ("kay jay seven jay ex em") and hyphenated callsigns, both behind guards that keep ordinary English out |
+| Roster from nothing | `mine_roster.py` proposes a roster from recordings alone, ranked by how many separate nets a callsign appears on and checked against a licence database |
+| Batch replay | A folder of recordings processed in one pass, skipping what is already done and what is still being written |
 | Escalation | Queued lines badged *waiting* and counted on the strip; re-transcribed ones badged *2nd pass*, and never left stranded when a pass fails or is dropped |
 
 Some of it was verified in ways worth trusting:
@@ -77,10 +84,35 @@ Some of it was verified in ways worth trusting:
 - **Traffic** — declarations detected including one that never says the word,
   denials not flagged, and the filter narrowing four lines to the two holding.
 
+## What real audio has now shown
+
+Two and a half hours of a live repeater went through the pipeline on
+2026-08-16. Four things came out of it that no amount of synthetic audio would
+have:
+
+- **An open-squelch feed did not segment at all.** webrtcvad called 74% of the
+  recording speech at *every* aggressiveness, because the gaps between overs
+  carry AGC'd hiss rather than silence. 35 of 39 clips ran to the two-minute
+  cap. The noise gate fixed it -- 223 transmissions at a 9.5 s median -- and
+  nothing in the synthetic test set could have surfaced it.
+- **Batch mode was silently discarding most of every recording.** A 75-minute
+  net came back as 34 lines out of 223 clips and exited successfully. Found
+  only because a real recording was long enough for the queue to spill.
+- **The prefer-unmatched bias holds on real audio.** Of 50 callsign-shaped
+  candidates mined, 22 are issued to nobody -- fragments of mangled
+  conversation like `I7R` and `B0I`. Every one would be rejected by a roster.
+- **People do not use phonetics on a conversational net.** They say "kay jay
+  seven jay ex em", which produced no candidate at all, and mixed renderings
+  silently dropped the prefix while matching on the remainder.
+
+What it has *not* shown is whether any of it is accurate. There is no roster
+for that net, so there is no ground truth -- only output that looks plausible.
+
 ## Not proven: the live audio path
 
-**No part of this has run against a real radio.** Everything above went through
-`--file` or a synthetic device. Specifically unverified:
+**No part of this has run against a real radio.** The audio above arrived over
+the internet; nothing has been plugged into this machine. Specifically
+unverified:
 
 - Opening a real capture device by name (`find_device`) against real
   PulseAudio names.
@@ -92,8 +124,8 @@ Some of it was verified in ways worth trusting:
 - The ring buffer's drop path under a machine genuinely falling behind.
 - The settings panel changing something that matters *while it matters*. Each
   control is tested; none has been used under pressure.
-- Attendance against real history. It has only ever scored sessions produced by
-  replaying the same handful of recordings.
+- Attendance against real history. It has now scored two sessions of real net
+  audio, but with no roster to score against, so the ranking is untested.
 - Any of it on a GPU. CUDA is auto-detected, the status strip reports what it
   resolved to, and none of it has been run against an actual NVIDIA device.
 - The ONNX speaker backend against a *real* model. The adapter is tested
@@ -106,7 +138,10 @@ an order where each step fails in a way you can diagnose.
 ## Not proven: every tuning constant
 
 These are guesses. They are *reasoned* guesses, and several have arithmetic
-behind them, but not one has met a real net. **One recorded net replaces most
+behind them, but not one has met a real net *on the air*. Note that a streamed
+feed cannot settle them either -- its gating, levels and inter-station delays
+belong to a signal path you will not be using, which is why
+[AUDIO-INPUT.md](AUDIO-INPUT.md) says not to run `tune.py` against one. **One recorded net replaces most
 of this table with measurements**, and `tools/tune.py` does the measuring:
 
 ```bash
@@ -193,7 +228,19 @@ Two consequences worth knowing:
 Roughly in order of value per effort, with transcription quality ranked above
 features:
 
-1. **Run a net.** Everything above is downstream of this.
+1. **Run a net.** Everything above is downstream of this, and it is the only
+   item that needs hardware rather than time. Recording a repeater over the
+   internet has taken this a useful distance -- the pipeline has now met real
+   voices, and two significant bugs fell out of that -- but a streamed feed
+   cannot exercise the capture path, the device-restart path, or the
+   thresholds, and a conversational net is the wrong *shape* for a race net
+   regardless.
+
+   The cheapest next increment, still without a radio: a **formal net**. A
+   check-in net uses phonetics and reads a roll call, which is both the case
+   this matcher was designed for and, effectively, a roster read aloud. PSRG
+   links its repeaters for one on Monday evenings and it is on the same
+   stream.
 
 2. **Benchmark alternatives to Whisper.** The highest-value item under "cycles
    go to transcription": Parakeet is faster *and* scores better on English, so
