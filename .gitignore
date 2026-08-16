@@ -14,3 +14,4 @@ spill/
 transcripts/
 voices.json
 voice_audio/
+.callsign-cache.json

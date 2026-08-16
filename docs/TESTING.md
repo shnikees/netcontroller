@@ -11,7 +11,7 @@ the library is missing, and a fallback nobody exercises is a fallback that is
 broken. That job earned its keep immediately: the scipy-free high-pass turned
 out not to remove rumble at all, and is now a boxcar filter that does.
 
-428 tests, all offline, no audio hardware. About 20 seconds, most of it
+437 tests, all offline, no audio hardware. About 20 seconds, most of it
 the pipeline tests deliberately running a slow transcriber in real time.
 
 ## What each suite covers
@@ -185,6 +185,36 @@ the mangled *text*, never the identity:
 def test_collapsed_suffix_keeps_the_a() -> None:
     assert normalize("kilo 7ABC") == "K7ABC"
 ```
+
+## When there is no roster
+
+`tools/mine_roster.py` is for a net you do not run -- no roster, only
+recordings. It ranks callsign-shaped tokens by **how many separate sessions**
+each appears on, because a real station identifies night after night while a
+mis-transcription is a one-off that does not reproduce.
+
+```bash
+python tools/mine_roster.py --transcripts transcripts/ --validate --out roster.draft.csv
+```
+
+Counting distinct sessions rather than mentions is the load-bearing part: one
+garbled transmission repeating a fragment five times is still one piece of
+evidence, and counting mentions would rank it above a real regular.
+
+`--validate` checks each candidate against a licence database, and it earns its
+keep immediately. On the first two nets mined, the *only* callsign appearing in
+both sessions was `N7W` -- which turns out not to be issued to anybody.
+Recurrence alone would have put a callsign that does not exist at the top of
+the roster.
+
+Two cautions the tool prints for itself. Distance is context and never
+evidence: a popular net collects check-ins from all over through EchoLink and
+AllStar, so a valid call a thousand miles away is an ordinary participant. And
+`non-us` means the database cannot answer rather than that the callsign is bad
+-- the VE7s across the Canadian border are regulars on a Puget Sound repeater.
+
+It proposes and you approve. Adopting a callsign the machine invented would let
+its own mistakes become the ground truth everything else is measured against.
 
 ## Adding a regression
 

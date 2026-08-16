@@ -42,7 +42,7 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 428 offline tests run on every push across Python 3.11–3.13 plus a
+audio, with 437 offline tests run on every push across Python 3.11–3.13 plus a
 job with the optional libraries removed.
 
 | Area | What works |
@@ -145,6 +145,7 @@ than a guess.
 | `tools/calibrate.py` | Nets already run | Escalation and voice thresholds, from the transcripts and profiles the app writes anyway. `--apply` patches the config |
 | `tools/rebuild_voices.py` | Kept enrolment audio | Profiles rebuilt after an embedder change; `--compare` scores two embedders on identical clips |
 | `tools/make_test_audio.py` | Nothing | Synthetic net audio, for exercising the pipeline with no radio |
+| `tools/mine_roster.py` | Nets already recorded | A *draft* roster, ranked by how many separate sessions each callsign appears on, optionally checked against a licence database. Proposes; never adopts |
 | `tools/bench_engines.py` | A recording, and optionally a second engine | Realtime factor and callsign recovery per engine, on real clip-sized workloads — the measurement that should precede buying anything |
 
 None of them needs hand-labelling: the roster is the supervision throughout.
