@@ -70,6 +70,15 @@ vad:
   # Audio kept from before the trigger, so clips do not start mid-syllable.
   preroll_ms: 300
   trigger_ratio: 0.7
+  # Noise gate, for a feed that never goes quiet -- an open squelch, a scanner,
+  # a streamed repeater. webrtcvad judges speech by spectral shape, and quiet
+  # hiss looks enough like a voice that it reports speech continuously; on a
+  # real repeater stream it called 74% of 75 minutes speech at *every*
+  # aggressiveness from 0 to 3. A frame must also stand this far above the
+  # tracked noise floor. Self-disabling: a squelched radio has a floor near
+  # zero, so the threshold lands near zero and nothing changes.
+  gate_margin: 1.5
+  gate_min_floor: 300     # below this the gate never engages at all
 
 # Two stations that key up inside vad.silence_ms of each other arrive as one
 # clip. This splits them back apart -- but only where Whisper's word timings

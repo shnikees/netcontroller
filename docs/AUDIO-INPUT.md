@@ -126,7 +126,17 @@ Two things make this the *easiest* input to bring up:
 - **No RF, no antenna, no overload.** Nothing to desense in a trailer full of
   transmitters, because there is no receiver.
 
-**But do not tune anything on it.** The channel is not the one you will run on:
+**The noise gate is what makes this work at all.** A streamed feed carries
+AGC'd receiver hiss between overs rather than silence, and webrtcvad reads that
+as continuous speech -- measured on 75 minutes of a real repeater stream, it
+called 74% of the recording speech at every aggressiveness from 0 to 3, so the
+clips ran to the two-minute cap and each held several speakers. `vad.gate_margin`
+adds a threshold relative to the tracked noise floor, which took that same
+recording from 39 capped blocks to 223 transmissions at a 9.5 s median. It is
+on by default and does nothing on a squelched radio.
+
+**But do not tune anything else on it.** The channel is not the one you will
+run on:
 
 | | Why it misleads |
 | --- | --- |

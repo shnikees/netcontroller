@@ -80,6 +80,7 @@ class SourceConfig:
     min_clip_ms: int | None = None
     preroll_ms: int | None = None
     trigger_ratio: float | None = None
+    gate_margin: float | None = None
 
     def vad_settings(self, defaults: "VadConfig") -> dict:
         """This source's VAD settings, falling back to the global block."""
@@ -90,6 +91,8 @@ class SourceConfig:
             "max_clip_ms": defaults.max_clip_ms,
             "preroll_ms": _or(self.preroll_ms, defaults.preroll_ms),
             "trigger_ratio": _or(self.trigger_ratio, defaults.trigger_ratio),
+            "gate_margin": _or(self.gate_margin, defaults.gate_margin),
+            "gate_min_floor": defaults.gate_min_floor,
         }
 
 
@@ -106,6 +109,11 @@ class VadConfig:
     max_clip_ms: int = 120_000
     preroll_ms: int = 300
     trigger_ratio: float = 0.7
+    gate_margin: float = 1.5
+    """Noise gate, for feeds that never go quiet. A frame counts as speech
+    only if it also sits this far above the tracked noise floor. Self-disabling
+    on a squelched receiver, whose floor is near zero -- see vad_segmenter."""
+    gate_min_floor: float = 300.0
 
 
 @dataclass

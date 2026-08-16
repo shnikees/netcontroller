@@ -42,13 +42,14 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 417 offline tests run on every push across Python 3.11–3.13 plus a
+audio, with 422 offline tests run on every push across Python 3.11–3.13 plus a
 job with the optional libraries removed.
 
 | Area | What works |
 | --- | --- |
 | Capture | Any input — SDR loopback, line in, microphone — at any sample rate, with per-source channel, gain and VAD settings |
 | Multiple receivers | Independent capture, health and priority per source; a tab each on the dashboard |
+| Segmentation, noisy feeds | A noise gate relative to the tracked floor, so an open squelch or streamed repeater segments at all -- 39 capped blocks became 223 transmissions on a real recording |
 | Segmentation | One clip per transmission, and splitting a clip that caught two stations on the pause between them |
 | Matching | Phonetic normalisation, fuzzy roster match, learned aliases, refusal when ambiguous |
 | Positions | The roster carries each operator's post; every line and the export show it |

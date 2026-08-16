@@ -11,7 +11,7 @@ the library is missing, and a fallback nobody exercises is a fallback that is
 broken. That job earned its keep immediately: the scipy-free high-pass turned
 out not to remove rumble at all, and is now a boxcar filter that does.
 
-417 tests, all offline, no audio hardware. About 20 seconds, most of it
+422 tests, all offline, no audio hardware. About 20 seconds, most of it
 the pipeline tests deliberately running a slow transcriber in real time.
 
 ## What each suite covers

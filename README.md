@@ -144,7 +144,7 @@ is the single most common way to get a stream of junk lines.
 .venv/bin/python -m pytest
 ```
 
-417 tests, all offline, no audio hardware needed — CI runs them on every push
+422 tests, all offline, no audio hardware needed — CI runs them on every push
 across Python 3.11–3.13, plus a job with the optional libraries removed so the
 Raspberry Pi fallback paths are exercised too. `test_callsign_match.py`
 covers the normalizer and matcher, including verbatim Whisper output;
