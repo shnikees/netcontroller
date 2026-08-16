@@ -274,15 +274,31 @@ def main() -> int:
     print("  " + ", ".join(c for c, _ in once[:24]) + ("..." if len(once) > 24 else ""))
 
     if args.out:
+        # A callsign nobody holds is not a proposal worth making. When the
+        # licence check has run, those are dropped from the draft rather than
+        # left for a human to notice -- they are still listed on screen above,
+        # because seeing what the transcription invented is useful.
+        proposed = [
+            (c, r) for c, r in likely
+            if not checked or checked.get(c, {}).get("status") != "not-issued"
+        ]
+        struck = len(likely) - len(proposed)
         lines = [
             "# Draft roster mined from recorded nets -- NOT verified.",
-            f"# {len(sessions)} sessions. Delete what you do not recognise, add names",
-            "# and positions, then save as roster.csv.",
+            f"# {len(sessions)} sessions." + (
+                f" {struck} unissued callsign(s) already removed." if struck else ""
+            ),
+            "# Delete what you do not recognise, add names and positions,",
+            "# then save as roster.csv.",
             "callsign,name,position,sources",
         ]
-        lines += [f"{c},,," for c, _ in likely]
+        lines += [f"{c},,," for c, _ in proposed]
         Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
-        print(f"\nWrote {args.out} -- {len(likely)} entries. Read it before using it.")
+        print(
+            f"\nWrote {args.out} -- {len(proposed)} entries"
+            + (f", {struck} unissued dropped" if struck else "")
+            + ". Read it before using it."
+        )
 
     if args.validate:
         print(

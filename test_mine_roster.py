@@ -177,3 +177,22 @@ def test_the_manifest_stops_a_recording_being_counted_twice(tmp_path) -> None:
     done = _json.loads(manifest.read_text())
     waiting = sorted(p.name for p in tmp_path.glob("*.wav") if p.name not in done)
     assert waiting == ["new.wav"]
+
+
+def test_the_draft_does_not_propose_a_callsign_nobody_holds(tmp_path) -> None:
+    """Recurrence alone once put N7W -- issued to nobody -- at the top of a
+    mined roster, because it was the only candidate appearing on both nets."""
+    import mine_roster
+
+    write_session(tmp_path, "01", ["whiskey six alpha bravo charlie"])
+    write_session(tmp_path, "02", ["whiskey six alpha bravo charlie"])
+    found = mine(sessions_from(tmp_path))
+    checked = {"W6ABC": {"status": "valid"}, "MADEUP": {"status": "not-issued"}}
+    found["MADEUP"] = {"sessions": {"01", "02"}, "mentions": 5, "example": ""}
+
+    proposed = [
+        c for c in found
+        if checked.get(c, {}).get("status") != "not-issued"
+    ]
+    assert "W6ABC" in proposed
+    assert "MADEUP" not in proposed
