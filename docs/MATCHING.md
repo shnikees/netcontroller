@@ -57,7 +57,33 @@ if two roster entries are equally plausible, the app flags the line
 a blank one, because net control will not notice the wrong one. Unmatched lines
 show the callsign the app *heard*, so it can be resolved by ear.
 
-### Homophones
+### Spelling without phonetics
+
+The phonetic alphabet is the exception outside a formal net, not the rule. On a
+conversational net people say "kay jay seven jay ex em", and a recording of a
+real repeater confirmed it. Left alone, that produced *no candidate at all* --
+worse, a mixed rendering like "kay jay seven juliet xray mike" silently dropped
+the prefix and kept the rest.
+
+Letter names are handled, but only inside a **run**. Every one of them is also
+an ordinary English word -- *see, you, are, be, ex, em, why* -- so converting
+them wherever they appear would manufacture callsigns out of "see you at
+eight". A run has to be at least three tokens, contain a digit, and hold two
+letters before any of it is read as spelling. Phonetics count towards a run
+without needing conversion themselves, because people mix the two freely.
+
+There is a second backstop: nothing without a digit is callsign-shaped, so even
+a false run cannot become a candidate. "I see you over there" stays English.
+
+"double u" is merged first, since W is common in US callsigns and two tokens
+would otherwise split the run in half.
+
+Measured honestly, this recovered only two extra callsigns across 223
+transmissions of real audio -- Whisper usually writes spoken letters as letters
+("KJ7EXM") rather than spelling them out. It closes a category of silent
+failure rather than moving a number.
+
+## Homophones
 
 "For" is a preposition in "standing by for traffic" and a 4 in "alpha for
 bravo". The normalizer converts an ambiguous word to a digit only when it sits

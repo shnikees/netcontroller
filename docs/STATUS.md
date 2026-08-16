@@ -42,7 +42,7 @@ handled in the rally deployment app instead.
 ## Proven
 
 Everything downstream of the audio device, against recorded and synthesised
-audio, with 422 offline tests run on every push across Python 3.11–3.13 plus a
+audio, with 428 offline tests run on every push across Python 3.11–3.13 plus a
 job with the optional libraries removed.
 
 | Area | What works |

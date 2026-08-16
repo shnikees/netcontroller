@@ -56,6 +56,7 @@ from rapidfuzz import fuzz
 from callsign_match import (
     _DIGIT_TO_SPOKEN,
     _LETTER_TO_PHONETIC,
+    LETTER_NAME_MAP,
     _spell_phonetically,
     CallsignMatcher,
     RosterEntry,
@@ -187,6 +188,37 @@ def collapsed_suffix(callsign: str) -> str:
     return " ".join(_LETTER_TO_PHONETIC[c] for c in prefix) + f" {digit}{suffix}"
 
 
+SPOKEN_LETTER = {v: k for k, v in reversed(list(LETTER_NAME_MAP.items()))}
+
+
+def letter_names(callsign: str) -> str:
+    """Spelled without phonetics -- "kay jay seven jay ex em".
+
+    How people actually identify on a conversational net, confirmed off a real
+    repeater recording. The phonetic alphabet is the exception outside a formal
+    net, not the rule.
+    """
+    return " ".join(
+        SPOKEN_LETTER.get(c, _DIGIT_TO_SPOKEN.get(c, c)) for c in callsign
+    )
+
+
+def half_letter_names(callsign: str) -> str:
+    """Prefix in letter names, suffix in phonetics. People mix constantly."""
+    prefix, digit, suffix = _parts(callsign)
+    return (
+        " ".join(SPOKEN_LETTER.get(c, c) for c in prefix)
+        + f" {_DIGIT_TO_SPOKEN[digit]} "
+        + " ".join(_LETTER_TO_PHONETIC[c] for c in suffix)
+    )
+
+
+def hyphen_joined(callsign: str) -> str:
+    """Whisper hyphenating a callsign it heard as one word: "KJ7-JXM"."""
+    prefix, digit, suffix = _parts(callsign)
+    return f"{prefix}{digit}-{suffix}"
+
+
 def in_net_traffic(callsign: str) -> str:
     """Wrapped in the filler that surrounds a real check-in."""
     return f"Net control, this is {spoken(callsign)}, checking in, no traffic."
@@ -209,6 +241,7 @@ LOSSLESS = [
     spoken, hyphenated, glued, numeric_digit, ordinal_digit,
     numeric_ordinal_digit, roman_digit, niner_er, niner_split,
     welded, collapsed_suffix, in_net_traffic, shouted, title_cased,
+    letter_names, half_letter_names, hyphen_joined,
 ]
 """Renderings that keep every character of the callsign. Failing to match one
 of these is a normalizer bug, not a limit of the audio."""
@@ -265,6 +298,13 @@ def test_ordinary_net_speech_is_never_a_callsign() -> None:
     phrases a net says constantly must stay unmatched.
     """
     said_on_every_net = [
+        # Letter names are all ordinary words, so these are the phrases that
+        # would break if the run guard were loosened.
+        "I see you over there",
+        "see you at eight",
+        "are you there or not",
+        "be sure to double the power",
+        "we are all set here",
         "net control this is a check in with no traffic",
         "we have nine or ten people at the aid station",
         "runner down at mile 12 requesting medical",

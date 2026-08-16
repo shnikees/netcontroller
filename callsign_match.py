@@ -155,6 +155,46 @@ FILLER_WORDS: frozenset[str] = frozenset(
     }
 )
 
+# How people say a callsign when they are not using phonetics, which on a
+# conversational net is most of the time: "kay jay seven jay ex em".
+#
+# Every one of these is also an ordinary English word, so they are converted
+# only inside a *run* of them -- see _letter_run_indices. "oh" is deliberately
+# absent: it is already read as a zero in digit position, which is the likelier
+# reading inside a callsign.
+LETTER_NAME_MAP: dict[str, str] = {
+    "ay": "A", "eh": "A",
+    "bee": "B", "be": "B",
+    "see": "C", "sea": "C", "cee": "C",
+    "dee": "D",
+    "ee": "E",
+    "ef": "F", "eff": "F",
+    "gee": "G",
+    "aitch": "H", "haitch": "H",
+    "eye": "I",
+    "jay": "J",
+    "kay": "K",
+    "el": "L", "ell": "L",
+    "em": "M",
+    "en": "N",
+    "pee": "P",
+    "cue": "Q", "queue": "Q",
+    "ar": "R", "are": "R",
+    "ess": "S", "es": "S",
+    "tee": "T", "tea": "T",
+    "yew": "U", "youu": "U", "you": "U",
+    "vee": "V",
+    "dubya": "W", "doubleu": "W",
+    "ex": "X",
+    "why": "Y", "wye": "Y",
+    "zee": "Z", "zed": "Z",
+}
+
+MIN_LETTER_RUN = 3
+"""Shortest run of letter names read as a spelled callsign. The shortest US
+callsign is three characters, so this cannot go lower; the digit requirement
+below is what keeps ordinary speech out."""
+
 BREAK = "\x00"
 """Marks where a word was dropped, so gluing does not run across the gap."""
 
@@ -372,6 +412,10 @@ def _spelled(chars: str) -> list[str]:
     return [c.upper() if c.isalpha() else c for c in chars]
 
 
+MAX_MERGED_CALLSIGN = 7
+"""Longest hyphen-joined fragment still read as one callsign rather than two."""
+
+
 def _split_hyphens(token: str) -> list[str]:
     """Split hyphen-joined words, unless the hyphen belongs to the word itself.
 
@@ -379,10 +423,29 @@ def _split_hyphens(token: str) -> list[str]:
     six-tango uniform victor" -- and treating that as one token loses both the
     digit and the letter. But "x-ray" is a vocabulary entry in its own right, so
     anything already in the tables is left alone.
+
+    The other direction matters too. Whisper also hyphenates a callsign it heard
+    as one word -- "KJ7-JXM" -- and *splitting* that loses it just as
+    thoroughly, because neither half is callsign-shaped and neither is a single
+    character, so nothing glues them back. When the pieces are short, not
+    vocabulary, and short enough together to be one callsign, they are joined
+    instead. Two full callsigns hyphenated together stay split, because the
+    join would be longer than any callsign.
     """
     if "-" not in token or token in PHONETIC_MAP or token in DIGIT_MAP:
         return [token]
-    return [part for part in token.split("-") if part]
+    parts = [part for part in token.split("-") if part]
+    vocabulary = {**PHONETIC_MAP, **DIGIT_MAP}
+    merged = "".join(parts)
+    if (
+        len(parts) > 1
+        and not any(part in vocabulary for part in parts)
+        and len(merged) <= MAX_MERGED_CALLSIGN
+        and any(c.isdigit() for c in merged)
+        and merged.isalnum()
+    ):
+        return [merged]
+    return parts
 
 
 def _split_glued_phonetics(token: str) -> list[str]:
@@ -455,12 +518,22 @@ def tokenize(text: str) -> list[Token]:
                     # good enough to locate a callsign, simpler than sub-spans.
                     spans.append((match.start(), match.end()))
 
+    expanded, spans = _merge_double_u(expanded, spans)
+    letter_run = _letter_run_indices(expanded)
+
     out: list[Token] = []
     for i, token in enumerate(expanded):
         start, end = spans[i]
 
         def emit(value: str) -> None:
             out.append(Token(value, start, end))
+
+        if i in letter_run and token in LETTER_NAME_MAP:
+            # Inside a run of letter names -- somebody spelling without
+            # phonetics. Placed ahead of FILLER_WORDS because several letter
+            # names ("you", "are") are filler in every other context.
+            emit(LETTER_NAME_MAP[token])
+            continue
 
         if _is_niner_tail(expanded, i):
             # Deliberately emits nothing at all -- not even a BREAK. The word is
@@ -490,6 +563,76 @@ def tokenize(text: str) -> list[Token]:
             emit(token.replace("-", "").replace("'", "").upper())
 
     return _glue_singles(out)
+
+
+def _merge_double_u(
+    tokens: list[str], spans: list[tuple[int, int]]
+) -> tuple[list[str], list[tuple[int, int]]]:
+    """"double u" is one letter, and a common one in US callsigns.
+
+    Left as two tokens it also breaks the letter run in half, so W6ABC spoken
+    without phonetics loses its prefix entirely.
+    """
+    out: list[str] = []
+    kept: list[tuple[int, int]] = []
+    i = 0
+    while i < len(tokens):
+        if (
+            tokens[i] == "double"
+            and i + 1 < len(tokens)
+            and tokens[i + 1] in ("u", "you", "yew")
+        ):
+            out.append("doubleu")
+            kept.append((spans[i][0], spans[i + 1][1]))
+            i += 2
+            continue
+        out.append(tokens[i])
+        kept.append(spans[i])
+        i += 1
+    return out, kept
+
+
+def _letter_run_indices(tokens: list[str]) -> set[int]:
+    """Indices sitting inside a callsign spelled with letter names.
+
+    Every letter name is also an English word, so converting them wherever they
+    appear would manufacture callsigns out of "see you", "are we", "be there".
+    A run is only read as spelling when it is long enough to be a callsign
+    *and* contains a digit -- and since nothing without a digit is callsign
+    shaped, a false run cannot produce a candidate even if one slips through.
+
+    "I see you" stays English: three tokens, no digit. "kay jay seven jay ex
+    em" converts.
+    """
+    def spellable(token: str) -> bool:
+        # Phonetics count towards the run even though they need no help
+        # themselves: people mix the two freely -- "kay jay seven juliet xray
+        # mike" -- and a phonetic in the middle should not end the run and
+        # strand the letter names on either side.
+        return (
+            token in LETTER_NAME_MAP
+            or token in PHONETIC_MAP
+            or token in DIGIT_MAP
+            or token.isdigit()
+            or (len(token) == 1 and token.isalnum())
+        )
+
+    found: set[int] = set()
+    start = 0
+    while start < len(tokens):
+        if not spellable(tokens[start]):
+            start += 1
+            continue
+        end = start
+        while end < len(tokens) and spellable(tokens[end]):
+            end += 1
+        run = tokens[start:end]
+        has_digit = any(t.isdigit() or t in DIGIT_MAP for t in run)
+        letters = sum(1 for t in run if t in LETTER_NAME_MAP or t.isalpha())
+        if len(run) >= MIN_LETTER_RUN and has_digit and letters >= 2:
+            found.update(range(start, end))
+        start = end
+    return found
 
 
 def _is_digit_position(tokens: list[str], index: int) -> bool:
