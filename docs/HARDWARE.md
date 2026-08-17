@@ -37,6 +37,45 @@ flattering an engine with one long file:
 python tools/bench_engines.py --audio net.wav --roster roster.csv --repeat 5
 ```
 
+## Biasing is the biggest lever, and half of what it appears to give is fake
+
+Measured 2026-08-17 over 919 transmissions from three live nets, `base`, with
+three callsigns confirmed by a member of the net. "Raw" counts every roster
+match; "trusted" counts what survives `hallucination.py`, which drops a
+transcript once it looks like the model reciting the prompt rather than a
+transmission.
+
+| Biasing | Raw | Trusted | Discarded |
+| --- | --- | --- | --- |
+| none (control) | 22 | 22 | 0% |
+| `initial_prompt` | 163 | 75 | 54% |
+| **`hotwords`** | 420 | **203** | 52% |
+| both together | 680 | 138 | **80%** |
+
+**The two rankings disagree, and that is the whole point.** By raw count,
+prompt-and-hotwords wins by a mile at 680. By trusted count it is beaten by
+hotwords alone, 203 to 138. Measuring recoveries without a precision check
+would have selected the *worst* of the biased configurations while appearing to
+select the best.
+
+**Stacking both mechanisms does not compound, it over-biases.** Four fifths of
+that configuration's output is the prompt read back. And because the filter is
+all-or-nothing -- once a transcript is the prompt coming back there is no
+principled way to pick which of its callsigns were real -- clips where a
+genuine callsign sat next to a fabricated one are discarded too. Piling on bias
+made the model less able to hear.
+
+**What to do with this:** `hotwords` alone is worth about 9x the control, and
+`stt_worker.py` does not currently use it at all -- it passes `initial_prompt`,
+which measures at 75 against hotwords' 203. That is a code change rather than a
+purchase, and it is the largest single improvement measured anywhere in this
+file.
+
+Caveats worth keeping attached: one model, one roster of three callsigns, and
+"trusted" is defined by a heuristic written the same day. The control
+discarding nothing is reassuring -- with no bias terms there is nothing to
+echo -- but it is not proof the detector is right.
+
 ## Measured on real audio, which inverts the result below
 
 Everything in the next section is synthetic speech. On 2026-08-16 the same
@@ -79,9 +118,9 @@ hardware to run a bigger model.
   supported by this. On real audio `base` beat both.
 - A GPU bought to run `large-v3` live would, on this evidence, buy worse
   callsign recovery. Re-run this measurement before spending anything.
-- The roster prompt matters more than the model. An earlier pass over the same
-  recordings *without* the known callsigns in the prompt found 8 recoveries
-  across four hours; this pass found 16 in twenty-four minutes.
+- The roster prompt matters more than the model -- and `hotwords` matters more
+  than the prompt. See the biasing table above, which measures both against a
+  control and against hallucination.
 
 ## Measured on synthetic speech: engines and model sizes
 
