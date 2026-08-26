@@ -351,6 +351,7 @@ class Pipeline:
         self.stt = SttWorker(
             model_size=config.whisper.model_size,
             bias_mode=config.whisper.bias_mode,
+            cpu_threads=config.whisper.cpu_threads,
             device=config.whisper.device,
             compute_type=config.whisper.compute_type,
             beam_size=config.whisper.beam_size,
@@ -1105,6 +1106,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--roster", help="override the roster CSV path")
     parser.add_argument("--port", type=int, help="override the web server port")
     parser.add_argument("--model", help="override the Whisper model size")
+    parser.add_argument(
+        "--session-name",
+        help="name the session file instead of using a timestamp; for batch "
+        "replays, where the caller knows which recording this is",
+    )
+    parser.add_argument(
+        "--cpu-threads",
+        type=int,
+        help="threads for CPU inference; 0 is the library default",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument(
         "--no-log-file", action="store_true", help="console logging only"
@@ -1129,6 +1140,7 @@ async def run(
     config: Config,
     wav_path: str | None,
     batch: bool = False,
+    session_name: str | None = None,
     resume: str | None = None,
     config_path: str | None = None,
 ) -> None:
@@ -1185,6 +1197,7 @@ async def run(
             store,
             fsync=config.transcripts.fsync,
             resume=resume_path,
+            name=session_name,
         )
         path = session.start()
         if path:
@@ -1332,6 +1345,8 @@ def main(argv: list[str] | None = None) -> int:
         config.server.port = args.port
     if args.model:
         config.whisper.model_size = args.model
+    if args.cpu_threads is not None:
+        config.whisper.cpu_threads = args.cpu_threads
 
     log_path = setup_logging(
         log_dir=None if args.no_log_file else config.logging.dir,
@@ -1356,6 +1371,7 @@ def main(argv: list[str] | None = None) -> int:
                 config,
                 args.file,
                 batch=args.batch,
+                session_name=args.session_name,
                 resume=args.resume,
                 config_path=config_path,
             )

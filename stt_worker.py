@@ -112,6 +112,11 @@ class SttWorker:
     prompt_token_budget: int = 200
     """Under Whisper's 224-token window, leaving room for the lead-in."""
     condition_audio: bool = True
+    cpu_threads: int = 0
+    """Threads for CPU inference. 0 leaves it to the library, which turned out
+    to mean roughly one core busy on an 8-core desktop -- a batch replay took
+    far longer than the hardware warranted. Set to the core count to use the
+    machine; leave low when something else needs the CPU during a net."""
     log_prob_threshold: float = -1.0
     no_speech_threshold: float = 0.6
     """Whisper invents text on clips that are only noise; these two are what
@@ -152,7 +157,10 @@ class SttWorker:
             compute_type,
         )
         self._model = WhisperModel(
-            self.model_size, device=device, compute_type=compute_type
+            self.model_size,
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=self.cpu_threads,
         )
         # Recorded so the dashboard can show what inference is *actually*
         # running on: `device: auto` quietly choosing the CPU on a machine with

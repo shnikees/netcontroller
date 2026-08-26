@@ -133,6 +133,9 @@ class SplitConfig:
 @dataclass
 class WhisperConfig:
     model_size: str = "base"
+    cpu_threads: int = 0
+    """Threads for CPU inference; 0 is the library default. Worth raising for a
+    batch replay, where nothing competes for the machine."""
     bias_mode: str = "hotwords"
     """How the roster reaches Whisper: "hotwords" or "prompt". Hotwords
     recovered more than twice as many callsigns on real net audio -- see

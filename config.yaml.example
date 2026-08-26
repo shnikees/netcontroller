@@ -103,6 +103,10 @@ whisper:
   # prompt-echo check: hotwords 429, prompt 193, both together 299. Do not set
   # both -- combining them made the model likelier to recite the list back.
   bias_mode: hotwords
+  # Threads for CPU inference. 0 leaves it to the library, which in practice
+  # keeps about one core busy -- fine while a net is running and other things
+  # need the machine, slow for a batch replay. Set it to the core count there.
+  cpu_threads: 0
   # cpu | cuda | auto (auto uses CUDA when ctranslate2 reports a device)
   device: auto
   # null picks int8 on CPU, float16 on CUDA.

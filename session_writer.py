@@ -65,6 +65,7 @@ class SessionWriter:
         fsync: bool = True,
         started_at: datetime | None = None,
         resume: str | Path | None = None,
+        name: str | None = None,
     ) -> None:
         self.directory = Path(directory)
         self.store = store
@@ -72,6 +73,15 @@ class SessionWriter:
         self.started_at = started_at or datetime.now()
         self.resume = Path(resume) if resume else None
         """An existing session to continue, rather than starting a new file."""
+        self.name = name
+        """Override the generated filename.
+
+        A timestamp is right for a live net -- it is when the net happened. It
+        is wrong for a batch replay, where the caller already knows which
+        recording this is and had to work the answer out afterwards by diffing
+        the directory. That diff was ambiguous the moment two replays ran at
+        once, and it silently produced no name at all when the paths did not
+        line up."""
         self.jsonl_path: Path | None = None
         self.text_path: Path | None = None
         self.entries_written = 0
@@ -96,7 +106,7 @@ class SessionWriter:
                     {"type": "resumed", "at": self.started_at.isoformat()}
                 )
             else:
-                stamp = self.started_at.strftime("%Y%m%d-%H%M%S")
+                stamp = self.name or self.started_at.strftime("%Y%m%d-%H%M%S")
                 self.jsonl_path = self.directory / f"net-{stamp}.jsonl"
                 self.text_path = self.directory / f"net-{stamp}.txt"
                 self._write_line(

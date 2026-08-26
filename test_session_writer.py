@@ -23,6 +23,7 @@ after a tidy close.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 
 import pytest
@@ -256,3 +257,39 @@ def test_latest_session_finds_the_newest(tmp_path) -> None:
 def test_nothing_to_resume_from_is_not_an_error(tmp_path) -> None:
     assert latest_session(tmp_path / "nope") is None
     assert TranscriptStore().restore([]) == 0
+
+
+# --------------------------------------------------------------------------
+# Naming a session explicitly
+#
+# A timestamp is right for a live net -- it is when the net happened. For a
+# batch replay the caller already knows which recording it handed over, and
+# working the answer out afterwards by diffing the directory was ambiguous the
+# moment two replays overlapped. It also once produced no name at all, which a
+# cleanup pass read as "delete this".
+# --------------------------------------------------------------------------
+
+
+def test_a_named_session_uses_that_name(tmp_path) -> None:
+    store = TranscriptStore()
+    writer = SessionWriter(tmp_path, store, name="psrg-2026-08-19-0858")
+    path = writer.start()
+    assert path is not None
+    assert path.name == "net-psrg-2026-08-19-0858.jsonl"
+    assert writer.text_path.name == "net-psrg-2026-08-19-0858.txt"
+
+
+def test_without_a_name_it_still_stamps_the_time(tmp_path) -> None:
+    """A live net has no recording to be named after."""
+    writer = SessionWriter(tmp_path, TranscriptStore())
+    path = writer.start()
+    assert path is not None
+    assert re.fullmatch(r"net-\d{8}-\d{6}\.jsonl", path.name), path.name
+
+
+def test_two_named_sessions_do_not_collide(tmp_path) -> None:
+    """The reason this exists: replays running at once must not share a file."""
+    first = SessionWriter(tmp_path, TranscriptStore(), name="net-one").start()
+    second = SessionWriter(tmp_path, TranscriptStore(), name="net-two").start()
+    assert first != second
+    assert first.exists() and second.exists()

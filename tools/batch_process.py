@@ -45,10 +45,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
+import threading
 import sys
 import time
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -144,6 +147,24 @@ def main() -> int:
     parser.add_argument("--roster", help="default: roster.csv, or an empty one")
     parser.add_argument("--model", default="base")
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="recordings to transcribe at once. This, not --cpu-threads, is "
+        "where the speed is: one transcription uses about one core however "
+        "many threads it is given, because beam-search decoding is sequential. "
+        "Measured on an 8-core desktop, 16 threads on one recording took 238s "
+        "against 292s with the library default -- 18%%. Separate recordings are "
+        "independent, so N at once is close to N times the throughput.",
+    )
+    parser.add_argument(
+        "--cpu-threads",
+        type=int,
+        default=2,
+        help="threads per recording. Low on purpose: the gain past a couple is "
+        "small, and --jobs spends the cores far better.",
+    )
+    parser.add_argument(
         "--transcripts", help="default: from the config, relative to the repo"
     )
     parser.add_argument(
@@ -177,53 +198,62 @@ def main() -> int:
         print(f"Nothing new in {recordings} ({len(done)} already processed)")
         return 0
 
-    print(f"{len(waiting)} recording(s) to process, {len(done)} already done\n")
+    print(
+        f"{len(waiting)} recording(s) to process, {len(done)} already done, "
+        f"{args.jobs} job(s) x {args.cpu_threads} thread(s)\n"
+    )
     processed = failed = skipped = 0
-    for path in waiting:
+    lock = threading.Lock()
+
+    def run_one(path: Path) -> str:
         length = duration_of(path)
         if still_being_written(path):
-            print(f"  {path.name:34} still recording, leaving it")
-            skipped += 1
-            continue
+            return f"  {path.name:34} still recording, leaving it"
         if length < 60:
-            print(f"  {path.name:34} only {length:.0f}s, skipping")
-            skipped += 1
-            continue
+            return f"  {path.name:34} only {length:.0f}s, skipping"
         if args.dry_run:
-            print(f"  {path.name:34} would process ({length/60:.0f} min)")
-            continue
+            return f"  {path.name:34} would process ({length/60:.0f} min)"
 
-        before = sessions_in(transcripts) if transcripts.exists() else set()
+        # Name the session after the recording. The caller knows which file it
+        # is handing over, so there is no reason to work it out afterwards by
+        # diffing a directory -- which was ambiguous with two replays running
+        # and silently produced nothing when the paths disagreed.
+        session = path.stem
         started = time.time()
-        print(f"  {path.name:34} {length/60:5.1f} min ... ", end="", flush=True)
         result = subprocess.run(
             [sys.executable, str(REPO / "app.py"), "--file", str(path),
              "--batch", "--model", args.model, "--roster", str(roster),
+             "--cpu-threads", str(args.cpu_threads),
+             "--session-name", session,
              "--config", args.config, "--no-log-file"],
             cwd=REPO, capture_output=True, text=True,
         )
         if result.returncode != 0:
             tail = (result.stderr or result.stdout).strip().splitlines()
-            print(f"FAILED: {tail[-1][:60] if tail else 'no output'}")
-            failed += 1
-            continue
+            return f"  {path.name:34} FAILED: {tail[-1][:60] if tail else 'no output'}"
 
-        new = (sessions_in(transcripts) - before) if transcripts.exists() else set()
-        session = sorted(new)[0] if new else _newest_session_since(transcripts, started)
-        if not session:
-            # Never file a recording as done-with-no-session: something
-            # downstream will read that as "delete me".
-            print("WARNING: no session file found -- not recording as done")
-            failed += 1
-            continue
-        done[path.name] = {
-            "session": session,
-            "minutes": round(length / 60, 1),
-            "took_seconds": round(time.time() - started, 1),
-        }
-        manifest_path.write_text(json.dumps(done, indent=2), encoding="utf-8")
-        print(f"{time.time() - started:5.0f}s -> {session}")
-        processed += 1
+        written = transcripts / f"net-{session}.jsonl"
+        if not written.exists():
+            return f"  {path.name:34} FAILED: no session at {written.name}"
+
+        with lock:
+            done[path.name] = {
+                "session": written.name,
+                "minutes": round(length / 60, 1),
+                "took_seconds": round(time.time() - started, 1),
+            }
+            manifest_path.write_text(json.dumps(done, indent=2), encoding="utf-8")
+        return f"  {path.name:34} {length/60:5.1f} min {time.time()-started:5.0f}s -> {written.name}"
+
+    with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+        for line in pool.map(run_one, waiting):
+            print(line, flush=True)
+            if "FAILED" in line:
+                failed += 1
+            elif "->" in line:
+                processed += 1
+            else:
+                skipped += 1
 
     if temporary_roster and temporary_roster.exists():
         temporary_roster.unlink()

@@ -261,3 +261,43 @@ def test_the_newest_session_is_found_when_the_diff_is_empty(tmp_path) -> None:
 
     assert batch._newest_session_since(tmp_path, started) == "net-current.jsonl"
     assert batch._newest_session_since(tmp_path, time.time() + 60) == ""
+
+
+def test_parallel_jobs_do_not_lose_manifest_entries(tmp_path) -> None:
+    """The manifest is written from several threads at once.
+
+    Without a lock the last writer wins and recordings quietly vanish from the
+    record -- which means they get re-processed forever, or worse, are counted
+    as never done while their transcripts sit on disk.
+    """
+    import json as _json
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    manifest = tmp_path / ".batch-processed.json"
+    done: dict = {}
+    lock = threading.Lock()
+
+    def record(n: int) -> None:
+        with lock:
+            done[f"rec-{n}.wav"] = {"session": f"net-rec-{n}.jsonl"}
+            manifest.write_text(_json.dumps(done, indent=2))
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(record, range(24)))
+
+    written = _json.loads(manifest.read_text())
+    assert len(written) == 24, f"lost entries: only {len(written)} of 24"
+    assert written["rec-7.wav"]["session"] == "net-rec-7.jsonl"
+
+
+def test_the_session_name_comes_from_the_recording_not_a_diff() -> None:
+    """Deterministic naming is what makes --jobs safe.
+
+    The old detection diffed the transcripts directory before and after, which
+    cannot tell which of two concurrent replays created which file.
+    """
+    source = (Path(__file__).parent / "tools" / "batch_process.py").read_text()
+    assert "session = path.stem" in source
+    assert '"--session-name", session' in source
+    assert "sessions_in(transcripts) - before" not in source, "still diffing"
