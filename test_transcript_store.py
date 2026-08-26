@@ -146,7 +146,7 @@ def test_position_is_recorded_on_the_line() -> None:
     assert entry.position == "Turn 7"
 
 
-def test_the_exported_log_leads_with_position() -> None:
+def test_the_exported_log_leads_with_position(tmp_path) -> None:
     # This file gets read after the event by somebody reconstructing what
     # happened where.
     store = TranscriptStore()
@@ -161,7 +161,7 @@ def test_the_exported_log_leads_with_position() -> None:
         match_score=100.0,
         clip_duration=3.0,
     )
-    text = store.export_text(Path("/tmp") / "position-log.txt").read_text()
+    text = store.export_text(tmp_path / "position-log.txt").read_text()
     assert "K7XYZ (Turn 7 / Bob): car off at my corner" in text
 
 

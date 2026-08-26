@@ -146,22 +146,33 @@ def test_grid_distance_is_roughly_right() -> None:
 
 
 def test_a_recording_still_being_written_is_left_alone(tmp_path) -> None:
-    """A capture in progress looks exactly like a finished one until you notice
-    the file is still growing. Transcribing it would produce a truncated
-    session that then looks like a complete net."""
+    """Growth is the signal, not the timestamp.
+
+    An earlier version treated a recent mtime as proof on its own, and that
+    fell over the first time the recordings were copied to another machine:
+    `scp` stamps every file with the current time, so all 32 looked like they
+    were mid-capture and the entire batch was skipped with a cheerful message.
+    """
+    import threading
+
     sys.path.insert(0, str(Path(__file__).parent / "tools"))
     from batch_process import still_being_written
 
-    fresh = tmp_path / "now.wav"
-    fresh.write_bytes(b"\0" * 1000)
-    assert still_being_written(fresh)  # just touched
+    growing = tmp_path / "capturing.wav"
+    growing.write_bytes(b"\0" * 1000)
 
-    import os
-    old = tmp_path / "finished.wav"
-    old.write_bytes(b"\0" * 1000)
-    stale = time.time() - 3600
-    os.utime(old, (stale, stale))
-    assert not still_being_written(old)
+    def append():
+        time.sleep(0.3)
+        with growing.open("ab") as handle:
+            handle.write(b"\0" * 5000)
+
+    threading.Thread(target=append, daemon=True).start()
+    assert still_being_written(growing), "a file that is growing is being written"
+
+    # Freshly touched but not growing -- what a copied file looks like.
+    copied = tmp_path / "just-copied.wav"
+    copied.write_bytes(b"\0" * 1000)
+    assert not still_being_written(copied), "a copy is finished, whatever its mtime"
 
 
 def test_the_manifest_stops_a_recording_being_counted_twice(tmp_path) -> None:

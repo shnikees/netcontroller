@@ -68,14 +68,20 @@ def duration_of(path: Path) -> float:
 def still_being_written(path: Path) -> bool:
     """A capture in progress, rather than a finished recording.
 
-    Checked two ways because either alone can be fooled: a file written slowly
-    may look untouched between glances, and a file whose header is still a
-    placeholder reports a length that does not match its size.
+    Growth is the only trustworthy signal: a file that is not getting bigger is
+    not being written, whatever its timestamps say. An earlier version treated a
+    recent mtime as proof on its own, which fell over the first time a folder
+    was copied between machines -- `scp` stamps every file with the current
+    time, so all 32 recordings looked like they were mid-capture and the whole
+    batch was skipped.
+
+    A recent mtime is still worth something, as a hint that growth is worth
+    waiting a little longer to rule out. On an old file the check returns
+    immediately.
     """
-    if time.time() - path.stat().st_mtime < STILL_WRITING_SECONDS:
-        return True
     before = path.stat().st_size
-    time.sleep(1.5)
+    fresh = time.time() - path.stat().st_mtime < STILL_WRITING_SECONDS
+    time.sleep(2.0 if fresh else 0.5)
     return path.stat().st_size != before
 
 

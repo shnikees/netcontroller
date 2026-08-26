@@ -170,15 +170,13 @@ def test_clearing_a_missing_line_is_not_an_error() -> None:
     assert TranscriptStore().set_traffic_cleared(99, True) is None
 
 
-def test_the_exported_log_separates_outstanding_from_passed() -> None:
-    from pathlib import Path as _Path
-
+def test_the_exported_log_separates_outstanding_from_passed(tmp_path) -> None:
     store = TranscriptStore()
     passed = line(store, "K7XYZ", "with traffic for net control")
     line(store, "KD9MNO", "I have traffic for the EOC")
     store.set_traffic_cleared(passed.id, True)
 
-    text = store.export_text(_Path("/tmp") / "traffic-log.txt").read_text()
+    text = store.export_text(tmp_path / "traffic-log.txt").read_text()
     assert "Traffic outstanding: KD9MNO" in text
     assert "Traffic passed: K7XYZ" in text
     assert "[TRAFFIC PASSED]" in text
