@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from callsign_match import CALLSIGN_RE
+
 from audio_prep import prepare
 
 log = logging.getLogger(__name__)
@@ -72,13 +74,36 @@ class SttWorker:
         latency/accuracy tradeoff; `base` is the default because it keeps up on
         a laptop CPU while a net is running.
     device: "cpu", "cuda", or "auto" to use CUDA when it is available.
-    initial_prompt: roster-derived hotwords, from CallsignMatcher.hotwords().
+    initial_prompt: roster-derived bias terms, from CallsignMatcher.bias_terms().
+    bias_mode: how those terms reach the model -- "hotwords" or "prompt".
     """
 
     model_size: str = "base"
     device: str = "auto"
     compute_type: str | None = None
     initial_prompt: str = ""
+    bias_mode: str = "hotwords"
+    """How the roster is given to Whisper.
+
+    "prompt" seeds the decoder with a sentence naming the stations; "hotwords"
+    hands faster-whisper the terms directly. Measured over 2010 transmissions
+    from three live nets, against three callsigns confirmed by a member of the
+    net and scored only on matches that survived `hallucination.py`:
+
+        hotwords                    429 trusted
+        prompt (callsigns only)     193
+        prompt (with the alphabet)  151
+        both together               299
+
+    Hotwords wins by more than two to one and discards the least, so it is the
+    default. Kept switchable because that is one net, one model and one roster
+    of three -- if it misbehaves on yours, "prompt" is the old behaviour
+    exactly.
+
+    Do not set both. Combining them measured *worse* than either alone: piling
+    on bias made the model more willing to recite the list back rather than
+    admit it heard nothing.
+    """
     beam_size: int = 5
     language: str | None = "en"
     word_timestamps: bool = True
@@ -147,6 +172,52 @@ class SttWorker:
             log.debug("CUDA probe failed; falling back to CPU", exc_info=True)
         return "cpu"
 
+    def build_bias(self, terms: list[str]) -> str:
+        """The bias string for whichever mode is configured.
+
+        One entry point so the caller does not have to know which it is, and so
+        the two can never drift apart on token budgeting.
+        """
+        return (
+            self.build_hotwords(terms)
+            if self.bias_mode == "hotwords"
+            else self.build_prompt(terms)
+        )
+
+    def build_hotwords(self, terms: list[str]) -> str:
+        """Callsigns only, comma separated, no lead-in.
+
+        Deliberately narrower than the prompt. `bias_terms` also offers the
+        phonetic alphabet, which earns its place in a *prompt* -- 26 words that
+        help every spelled callsign decode. As hotwords it is untested, and the
+        configuration that actually won was three callsigns and nothing else,
+        so that is what is reproduced here rather than something adjacent to it
+        that was never measured.
+
+        Still budgeted: faster-whisper feeds hotwords through the same prompt
+        construction, so the 224-token window applies just as it does to a
+        prompt.
+        """
+        callsigns = [term for term in terms if CALLSIGN_RE.fullmatch(term.upper())]
+        if self._model is None:
+            self.load()
+        tokenizer = self._tokenizer()
+        if tokenizer is None:  # pragma: no cover - only if the API changes
+            self.prompt_terms_used = min(len(callsigns), 40)
+            self.prompt_terms_offered = len(callsigns)
+            return ", ".join(callsigns[:40])
+
+        used, kept = 0, []
+        for callsign in callsigns:
+            cost = len(tokenizer.encode(f" {callsign},"))
+            if used + cost > self.prompt_token_budget:
+                break
+            kept.append(callsign)
+            used += cost
+        self.prompt_terms_used = len(kept)
+        self.prompt_terms_offered = len(callsigns)
+        return ", ".join(kept)
+
     def build_prompt(self, terms: list[str], lead_in: str = LEAD_IN) -> str:
         """Pack as many bias terms as the token window allows, in order.
 
@@ -192,11 +263,14 @@ class SttWorker:
             self.load()
         if self.condition_audio:
             audio = prepare(audio)
+        bias = (prompt if prompt is not None else self.initial_prompt) or None
+        as_hotwords = self.bias_mode == "hotwords"
         segments, info = self._model.transcribe(  # type: ignore[union-attr]
             audio,
             language=self.language,
             beam_size=self.beam_size,
-            initial_prompt=(prompt if prompt is not None else self.initial_prompt) or None,
+            initial_prompt=None if as_hotwords else bias,
+            hotwords=bias if as_hotwords else None,
             vad_filter=False,  # the segmenter already did this
             condition_on_previous_text=False,  # transmissions are independent
             word_timestamps=self.word_timestamps,

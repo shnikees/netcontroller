@@ -526,6 +526,9 @@ class EchoStub:
     def build_prompt(self, terms, lead_in=""):
         return ""
 
+    def build_bias(self, terms):
+        return ""
+
 
 def _clip(seconds: float = 3.0):
     return SimpleNamespace(
@@ -584,3 +587,59 @@ def test_an_echo_is_not_split_into_several_transmissions(tmp_path, loop) -> None
     pipeline.config.split.enabled = True
     pipeline._handle_clip(_clip())
     assert len(store.entries) == 1
+
+
+# --------------------------------------------------------------------------
+# How the roster reaches Whisper
+# --------------------------------------------------------------------------
+
+
+class RecordingModel:
+    """Captures the keyword arguments faster-whisper would have received."""
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def transcribe(self, audio, **kw):
+        self.calls.append(kw)
+        return iter(()), SimpleNamespace(language="en")
+
+
+def _worker(mode):
+    from stt_worker import SttWorker
+
+    worker = SttWorker(bias_mode=mode, condition_audio=False)
+    worker._model = RecordingModel()
+    return worker
+
+
+def test_hotwords_mode_does_not_also_send_a_prompt() -> None:
+    """Sending both measured worse than either alone, so the two modes must be
+    exclusive rather than additive."""
+    worker = _worker("hotwords")
+    worker.transcribe(np.zeros(16_000, dtype=np.float32), prompt="W6ABC, K7XYZ")
+    call = worker._model.calls[0]
+    assert call["hotwords"] == "W6ABC, K7XYZ"
+    assert call["initial_prompt"] is None
+
+
+def test_prompt_mode_is_the_old_behaviour_exactly() -> None:
+    worker = _worker("prompt")
+    worker.transcribe(np.zeros(16_000, dtype=np.float32), prompt="Net check-ins. W6ABC.")
+    call = worker._model.calls[0]
+    assert call["initial_prompt"] == "Net check-ins. W6ABC."
+    assert call["hotwords"] is None
+
+
+def test_hotwords_carry_callsigns_without_the_alphabet() -> None:
+    """bias_terms offers the phonetic alphabet as well. It earns its place in a
+    prompt and is untested as a hotword, so the measured configuration --
+    callsigns only -- is what gets reproduced."""
+    from stt_worker import SttWorker
+
+    worker = SttWorker(bias_mode="hotwords")
+    worker._model = RecordingModel()
+    worker._tokenizer_cache = None
+    built = worker.build_hotwords(["W6ABC", "alpha", "bravo", "K7XYZ", "niner"])
+    assert "W6ABC" in built and "K7XYZ" in built
+    assert "alpha" not in built and "niner" not in built

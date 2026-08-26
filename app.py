@@ -350,6 +350,7 @@ class Pipeline:
 
         self.stt = SttWorker(
             model_size=config.whisper.model_size,
+            bias_mode=config.whisper.bias_mode,
             device=config.whisper.device,
             compute_type=config.whisper.compute_type,
             beam_size=config.whisper.beam_size,
@@ -614,7 +615,12 @@ class Pipeline:
                 heard=heard,
                 attendance=self.attendance.for_source(source),
             )
-            self._prompts[source] = self.stt.build_prompt(terms)
+            # getattr rather than a direct call: engines are swapped in tests
+            # and may predate build_bias. A missing attribute here raises inside
+            # the try/except that stops one bad clip killing the net, so it
+            # would show up as an empty log rather than an error.
+            build = getattr(self.stt, "build_bias", None) or self.stt.build_prompt
+            self._prompts[source] = build(terms)
             log.debug(
                 "[%s] prompt carries %d of %d bias terms",
                 source or "main",
@@ -778,7 +784,8 @@ class Pipeline:
             attendance=self.attendance.for_source(source),
         )
         try:
-            better = worker.transcribe(audio, prompt=worker.build_prompt(terms))
+            build = getattr(worker, "build_bias", None) or worker.build_prompt
+            better = worker.transcribe(audio, prompt=build(terms))
         except Exception as exc:
             self.fleet.note_error(f"escalation failed: {exc}")
             log.exception("Escalation pass failed for entry %d", entry_id)
@@ -838,6 +845,7 @@ class Pipeline:
             log.info("Loading %s for second-pass transcription", settings.model_size)
             self._escalator = SttWorker(
                 model_size=settings.model_size,
+                bias_mode=self.config.whisper.bias_mode,
                 device=settings.device,
                 compute_type=settings.compute_type,
                 beam_size=self.config.whisper.beam_size,

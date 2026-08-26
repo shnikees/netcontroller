@@ -133,6 +133,10 @@ class SplitConfig:
 @dataclass
 class WhisperConfig:
     model_size: str = "base"
+    bias_mode: str = "hotwords"
+    """How the roster reaches Whisper: "hotwords" or "prompt". Hotwords
+    recovered more than twice as many callsigns on real net audio -- see
+    stt_worker.SttWorker.bias_mode for the numbers."""
     condition_audio: bool = True
     """High-pass and normalise each clip before decoding. Sub-millisecond."""
     prompt_token_budget: int = 200
