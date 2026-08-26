@@ -144,16 +144,50 @@ unverified:
   audio, but with no roster to score against, so the ranking is untested.
 - Any of it on a GPU. CUDA is auto-detected, the status strip reports what it
   resolved to, and none of it has been run against an actual NVIDIA device.
-- ONNX speaker embeddings against *labelled* voices. A real wespeaker ECAPA
-  export now runs through the adapter -- which found a bug worth having: the
-  features were not mean-normalised, and the model embedded five different
-  clips of net audio to within 0.013 cosine similarity. Every voice looked
-  alike, with no error anywhere. Fixed, and the same clips now spread over
-  0.159. What is still untested is whether those embeddings identify the right
-  *person*, which needs clips labelled by who was speaking.
+- Voice identification working well enough to use. It has now been measured
+  rather than assumed, and the answer is no -- see below.
 
 [FIELD-BRINGUP.md](FIELD-BRINGUP.md) is the checklist for closing this gap, in
 an order where each step fails in a way you can diagnose.
+
+## Measured and not working: voice identification
+
+Tested 2026-08-26 against 194 clips from 24 separate nets, labelled by the
+callsign the matcher confidently attributed, embedded with a real wespeaker
+ECAPA-TDNN export:
+
+| | n | mean cosine |
+| --- | --- | --- |
+| Same callsign | 489 | 0.563 |
+| Different callsign | 11,829 | 0.490 |
+| **Separation** | | **+0.072** |
+
+A same-callsign pair beats a random different-callsign pair **59.6%** of the
+time, against 50% for no signal at all. So the embeddings do carry speaker
+information -- with those sample sizes the separation is real -- and they carry
+far too little of it to identify anybody. Asked which of two pairs is the same
+person it would be wrong about four times in ten. A working speaker-verification
+system separates these distributions almost completely.
+
+**`voice.enabled` stays off.** It was already off by default out of caution;
+this is the first evidence that the caution was right.
+
+Four candidate causes, most likely first:
+
+1. **The features are still not what the model expects.** Same class of bug as
+   the mean normalisation fixed the same day -- right shape, wrong
+   distribution. Wespeaker feeds Kaldi-compatible fbank; `voice_onnx.log_mel`
+   is a hand-rolled approximation borrowed from the built-in embedder. Fixing
+   normalisation moved separation on raw clips from 0.013 to 0.159, so the rest
+   of the fbank could matter as much. This is the item on the list below.
+2. **The labels are noisy.** They come from the matcher, which misattributes.
+   Every wrong label puts a different-speaker pair in the "same" bucket, so
+   0.072 is a floor rather than an estimate.
+3. **Channel rather than voice.** Every clip shares the repeater, its AGC and
+   the stream codec. Pairs were drawn across 24 different nets to blunt that,
+   not to remove it.
+4. **A callsign is not always one voice.** A club station or a shared rig
+   breaks the assumption outright.
 
 ## Not proven: every tuning constant
 
@@ -334,11 +368,29 @@ features:
    **Measuring any of it needs a denominator.** Twenty clips listened to and
    written down by hand turns every number above from relative into absolute.
 
-4. **Make matching source-aware.** Per-frequency rosters currently bias
+4. **Compare `log_mel` against a reference fbank.** The cheapest way to find
+   out whether voice identification is beaten by the audio or by my feature
+   extraction, and those need very different responses.
+
+   `torchaudio.compliance.kaldi.fbank` is what wespeaker itself feeds the
+   model. Generate features both ways over the same clips, compare them
+   directly -- per-coefficient correlation and scale -- and then re-run the
+   labelled-clip test with each. If the reference features separate the
+   distributions and mine do not, the problem is a hand-rolled front end and is
+   fixable. If both land near 59.6%, voice identification does not work on
+   streamed repeater audio and the feature is a dead end worth closing rather
+   than carrying.
+
+   Deliberately a *comparison* and not a rewrite: torch is a heavy dependency
+   for a Pi install, so it belongs in a test rather than the runtime. What ships
+   is whatever `log_mel` needs to change to match, which is likely the window
+   function, the frame geometry and the mel scale.
+
+5. **Make matching source-aware.** Per-frequency rosters currently bias
    decoding but do not influence matching. Preferring same-frequency stations
    would cut wrong matches on a 100-station roster — carefully, since people do
    turn up on the other frequency.
-5. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
+6. **Replay the audio behind a line.** Deferred deliberately, not forgotten.
    The appeal is settling "what did they actually say" when the transcript
    itself is in doubt — but a race trailer already has several people talking,
    and playing a clip back into that room adds to the problem it is meant to
@@ -349,7 +401,7 @@ features:
    playback, but the stored clips make either possible. The clips kept for
    voice enrolment already prove the storage side works.
 
-6. **Improve the logging logic.** Raised as a future item, not yet scoped.
+7. **Improve the logging logic.** Raised as a future item, not yet scoped.
    What exists today: `logging_setup.py` writes rotating application logs,
    `session_writer.py` writes the fsynced JSONL transcript that `--resume`
    reads back, and the export writes CSV and text at the end. The pieces work,
@@ -406,7 +458,7 @@ features:
    recorded. It also answers half the scoping question above — this is the
    transcript side, not the application logs.
 
-7. **Review after the net, not during it.** Everything self-supervised is in
+8. **Review after the net, not during it.** Everything self-supervised is in
    place, but the operator-supplied labels — corrections — currently have to
    be made live. A post-net review mode, working from the session file and the
    clip audio, would let those be batched into a few minutes afterwards

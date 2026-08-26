@@ -133,6 +133,15 @@ holding verbatim Whisper output. When your net turns up a new mis-transcription:
 
 ## Recognising a station by voice
 
+> **Measured, and it does not currently work well enough to use.** Over 194
+> clips from 24 nets, same-callsign pairs beat different-callsign pairs 59.6% of
+> the time against a 50% baseline. The signal is real and far too weak to
+> identify anybody. `voice.enabled` stays off, and the likeliest cause -- a
+> hand-rolled feature front end rather than the audio itself -- is item 4 in
+> [STATUS.md](STATUS.md#worth-doing-next). What follows describes how the
+> feature works, not a claim that it does.
+
+
 Everything above works on what was *said*. This works on *who said it*, for the
 case nothing else can reach: **a transmission with no usable callsign in it**.
 "Back to you, net control" stays unmatched no matter how good transcription
