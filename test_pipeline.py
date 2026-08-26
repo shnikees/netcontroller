@@ -29,6 +29,7 @@ import threading
 import time
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -489,3 +490,97 @@ def test_a_clip_dropped_from_a_full_queue_stops_claiming_to_be_waiting(
     assert first.escalation_pending is False
     assert second.escalation_pending is True
     assert third.escalation_pending is True
+
+
+# --------------------------------------------------------------------------
+# Prompt echo reaching the log
+#
+# hallucination.py was written, tested and documented a week before anything
+# imported it, so the live pipeline went on logging fabricated callsigns while
+# the measurements said not to. These cover the wiring rather than the rule.
+# --------------------------------------------------------------------------
+
+
+class EchoStub:
+    """A transcriber that reads the prompt back, as Whisper does on a dead clip.
+
+    Carries the attributes the pipeline reads off its engine -- the prompt
+    counters among them -- because `Pipeline` reports them on the status strip
+    and a stub without them fails inside the try/except that is there to keep
+    one bad clip from killing the net, which turns a missing attribute into a
+    silently empty log.
+    """
+
+    prompt_terms_used = 0
+    prompt_terms_offered = 0
+    active_device = "cpu"
+    active_compute_type = "int8"
+    model_size = "base"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def transcribe(self, audio, prompt=""):
+        return SimpleNamespace(text=self.text, confidence=0.9, words=[], language="en")
+
+    def build_prompt(self, terms, lead_in=""):
+        return ""
+
+
+def _clip(seconds: float = 3.0):
+    return SimpleNamespace(
+        audio=np.zeros(int(16_000 * seconds), dtype=np.float32),
+        start_offset_ms=0,
+        duration_ms=int(seconds * 1000),
+        sequence=1,
+        source="",
+    )
+
+
+def echo_pipeline(tmp_path, loop, text):
+    pipeline, store = build(tmp_path, loop, SlowStub())
+    pipeline.matcher = CallsignMatcher(
+        roster=[RosterEntry("W6ABC"), RosterEntry("K7XYZ"), RosterEntry("N5DEF")]
+    )
+    pipeline.stt = EchoStub(text)
+    return pipeline, store
+
+
+def test_a_recited_prompt_names_nobody(tmp_path, loop) -> None:
+    pipeline, store = echo_pipeline(tmp_path, loop, "W6ABC, K7XYZ, N5DEF.")
+    pipeline._handle_clip(_clip())
+
+    assert len(store.entries) == 1, "the transcript should still be logged"
+    entry = store.entries[0]
+    assert entry.matched is False
+    assert entry.matched_callsign is None
+    assert "prompt echo" in entry.unmatched_reason
+
+
+def test_the_transcript_survives_even_though_the_callsigns_do_not(tmp_path, loop) -> None:
+    """Dropping the line entirely would hide it from the operator, who may
+    recognise something in the text that the matcher cannot."""
+    pipeline, store = echo_pipeline(tmp_path, loop, "W6ABC, K7XYZ, N5DEF.")
+    pipeline._handle_clip(_clip())
+    assert store.entries[0].raw_text == "W6ABC, K7XYZ, N5DEF."
+
+
+def test_a_real_check_in_is_untouched(tmp_path, loop) -> None:
+    pipeline, store = echo_pipeline(
+        tmp_path, loop, "Net control, this is whiskey six alpha bravo charlie, no traffic"
+    )
+    pipeline._handle_clip(_clip())
+
+    entry = store.entries[0]
+    assert entry.matched is True
+    assert entry.matched_callsign == "W6ABC"
+    assert entry.unmatched_reason == ""
+
+
+def test_an_echo_is_not_split_into_several_transmissions(tmp_path, loop) -> None:
+    """Splitting on invented callsigns would turn one junk clip into three
+    lines, each looking like its own station."""
+    pipeline, store = echo_pipeline(tmp_path, loop, "W6ABC, K7XYZ, N5DEF.")
+    pipeline.config.split.enabled = True
+    pipeline._handle_clip(_clip())
+    assert len(store.entries) == 1

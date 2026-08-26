@@ -51,11 +51,12 @@ import uvicorn
 from audio_capture import TARGET_RATE, AudioCapture, list_devices
 import collections
 
-from callsign_match import CallsignMatcher, load_roster
+from callsign_match import CallsignMatcher, MatchResult, load_roster
 from clip_split import Segment, split_transmissions
 from clip_spill import SpillStore
 from config import Config, SourceConfig, audio_sources, load_config
 from feedback import FeedbackLog
+from hallucination import looks_hallucinated
 from health import ERROR, OK, WARNING, HealthFleet, HealthMonitor
 from logging_setup import setup_logging
 from resample import Resampler, describe
@@ -912,10 +913,30 @@ class Pipeline:
             log.debug("Empty transcription for %.1fs clip", clip.duration_ms / 1000)
             return
 
+        # Did the model just read the prompt back? Checked once, on the whole
+        # transcript, because the signals are properties of the clip rather than
+        # of any one segment -- three stations named at once, or the phonetic
+        # alphabet recited in order. Measured on real net audio, biasing that
+        # roughly quadrupled genuine recoveries also fabricated about half of
+        # what it produced, and a fabricated callsign puts a station somewhere
+        # they never were.
+        echoed, echo_reason = looks_hallucinated(
+            transcription.text,
+            [r.callsign for r in self.matcher.match_all(transcription.text) if r.matched],
+        )
+        if echoed:
+            health.note_error(f"ignored prompt echo: {echo_reason}")
+            log.warning(
+                "Callsigns ignored on a %.1fs clip -- %s: %r",
+                clip.duration_ms / 1000,
+                echo_reason,
+                transcription.text[:80],
+            )
+
         # Usually one transmission per clip. On a fast net two stations key up
         # inside the VAD's silence window and land in the same one.
         try:
-            segments = self._segments(clip, transcription)
+            segments = self._segments(clip, transcription, echoed)
         except Exception as exc:
             health.note_error(f"split failed: {exc}")
             log.exception("Could not split clip; logging it as one transmission")
@@ -923,9 +944,11 @@ class Pipeline:
                 Segment(transcription.text, 0, clip.duration_ms)
             ]
         for segment in segments:
-            self._log_transmission(clip, segment, started_at, transcription, late)
+            self._log_transmission(
+                clip, segment, started_at, transcription, late, echo_reason
+            )
 
-    def _segments(self, clip, transcription) -> list[Segment]:
+    def _segments(self, clip, transcription, echoed: bool = False) -> list[Segment]:
         whole = [
             Segment(
                 text=transcription.text,
@@ -933,7 +956,9 @@ class Pipeline:
                 duration_ms=clip.duration_ms,
             )
         ]
-        if not self.config.split.enabled:
+        if not self.config.split.enabled or echoed:
+            # Splitting on callsigns the model invented would turn one junk clip
+            # into several, each looking like its own transmission.
             return whole
         return split_transmissions(
             transcription.text,
@@ -945,10 +970,24 @@ class Pipeline:
         )
 
     def _log_transmission(
-        self, clip, segment: Segment, clip_started_at, transcription, late: bool
+        self,
+        clip,
+        segment: Segment,
+        clip_started_at,
+        transcription,
+        late: bool,
+        echo_reason: str = "",
     ) -> None:
         started_at = clip_started_at + timedelta(milliseconds=segment.start_offset_ms)
         result = self.matcher.match(segment.text)
+        if echo_reason:
+            # The transcript is still logged -- an operator may recognise
+            # something in it -- but no station is named on the strength of it.
+            result = MatchResult(
+                matched=False,
+                candidate=result.candidate,
+                reason=f"prompt echo: {echo_reason}",
+            )
         entry = self.store.add(
             started_at=started_at,
             matched=result.matched,

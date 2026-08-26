@@ -66,6 +66,7 @@ is the thing every earlier number was caveated on.
 | Spelling without phonetics | Letter names ("kay jay seven jay ex em") and hyphenated callsigns, both behind guards that keep ordinary English out |
 | Roster from nothing | `mine_roster.py` proposes a roster from recordings alone, ranked by how many separate nets a callsign appears on and checked against a licence database |
 | Batch replay | A folder of recordings processed in one pass, skipping what is already done and what is still being written |
+| Prompt echo | A transcript that is the bias list read back names nobody -- the text is still logged, the callsigns are not trusted, and the reason is on the line |
 | Escalation | Queued lines badged *waiting* and counted on the strip; re-transcribed ones badged *2nd pass*, and never left stranded when a pass fails or is dropped |
 
 Some of it was verified in ways worth trusting:
