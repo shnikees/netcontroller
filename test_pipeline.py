@@ -643,3 +643,46 @@ def test_hotwords_carry_callsigns_without_the_alphabet() -> None:
     built = worker.build_hotwords(["W6ABC", "alpha", "bravo", "K7XYZ", "niner"])
     assert "W6ABC" in built and "K7XYZ" in built
     assert "alpha" not in built and "niner" not in built
+
+
+def test_the_app_starts_where_asyncio_cannot_own_signals(monkeypatch) -> None:
+    """Windows' proactor loop raises NotImplementedError from
+    add_signal_handler rather than degrading, which stopped the app dead --
+    every recording in a batch run failed before a word was transcribed."""
+    import asyncio
+    import signal as signal_module
+
+    installed = []
+
+    class NoSignalLoop:
+        def add_signal_handler(self, *a, **kw):
+            raise NotImplementedError("windows")
+
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: NoSignalLoop())
+    monkeypatch.setattr(
+        signal_module, "signal", lambda sig, handler: installed.append(sig)
+    )
+
+    server = SimpleNamespace(should_exit=False)
+    loop = asyncio.get_running_loop()
+    for sig in (signal_module.SIGINT, signal_module.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, lambda: setattr(server, "should_exit", True))
+        except NotImplementedError:
+            signal_module.signal(sig, lambda *_: setattr(server, "should_exit", True))
+
+    assert installed == [signal_module.SIGINT, signal_module.SIGTERM]
+
+
+def test_batch_mode_binds_no_port() -> None:
+    """Batch replay has no operator, so it should have no listener.
+
+    Binding anyway made Windows Firewall prompt once per recording -- dozens of
+    unclearable dialogs during an unattended run over a folder of nets.
+    """
+    source = Path("app.py").read_text()
+    start = source.index("serving = not batch")
+    block = source[start : start + 700]
+    assert 'if serving else "127.0.0.1"' in block
+    assert "if serving else 0" in block
+    assert "if serving:\n            await server.serve()" in source

@@ -1228,24 +1228,39 @@ async def run(
     pipeline.start()
     watch = asyncio.create_task(watchdog(config, fleet, broadcaster))
 
+    # A batch replay has no operator, so it has no dashboard. Binding a port
+    # anyway made Windows Firewall prompt for every recording in a folder --
+    # once per app.py, unclearable, while the run was unattended. Loopback also
+    # sidesteps the case where two batch runs collide on the same port.
+    serving = not batch
     server = uvicorn.Server(
         uvicorn.Config(
             app,
-            host=config.server.host,
-            port=config.server.port,
+            host=config.server.host if serving else "127.0.0.1",
+            port=config.server.port if serving else 0,
             log_level="warning",
             access_log=False,
         )
     )
-    log.info(
-        "Dashboard on http://%s:%d",
-        "localhost" if config.server.host == "0.0.0.0" else config.server.host,
-        config.server.port,
-    )
+    if serving:
+        log.info(
+            "Dashboard on http://%s:%d",
+            "localhost" if config.server.host == "0.0.0.0" else config.server.host,
+            config.server.port,
+        )
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: setattr(server, "should_exit", True))
+        try:
+            loop.add_signal_handler(sig, lambda: setattr(server, "should_exit", True))
+        except NotImplementedError:
+            # Windows: asyncio's proactor loop cannot own signals at all, and
+            # raises rather than degrading. Without this the whole app refuses
+            # to start there -- every recording in a batch run failed with a
+            # bare NotImplementedError before anything was transcribed. The
+            # plain handler is enough for what this is used for: setting a flag
+            # so the server shuts down cleanly on Ctrl-C.
+            signal.signal(sig, lambda *_: setattr(server, "should_exit", True))
 
     if batch:
         # Replaying a recording to build up training data: finish the file,
@@ -1274,7 +1289,12 @@ async def run(
         asyncio.create_task(finish())
 
     try:
-        await server.serve()
+        if serving:
+            await server.serve()
+        else:
+            # No listener at all: just do the work and go.
+            while not server.should_exit:
+                await asyncio.sleep(0.2)
     finally:
         watch.cancel()
         remaining = pipeline.drain(timeout=config.buffering.drain_timeout_s)

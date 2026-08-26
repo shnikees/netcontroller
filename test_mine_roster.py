@@ -207,3 +207,57 @@ def test_the_draft_does_not_propose_a_callsign_nobody_holds(tmp_path) -> None:
     ]
     assert "W6ABC" in proposed
     assert "MADEUP" not in proposed
+
+
+# --------------------------------------------------------------------------
+# Where the batch tool looks for session files
+#
+# It used to look relative to its own working directory while app.py wrote
+# relative to the repo. Launched from anywhere else the two disagreed, every
+# recording was filed with an empty session name, and a cleanup that trusted
+# those names deleted the transcripts it was protecting.
+# --------------------------------------------------------------------------
+
+
+def _batch():
+    sys.path.insert(0, str(Path(__file__).parent / "tools"))
+    import batch_process
+
+    return batch_process
+
+
+def test_the_transcripts_path_ignores_the_working_directory(tmp_path, monkeypatch) -> None:
+    batch = _batch()
+    monkeypatch.chdir(tmp_path)  # anywhere but the repo
+    resolved = batch.transcripts_dir(None, "config.yaml")
+    assert resolved.is_absolute()
+    assert resolved.parent == batch.REPO
+    assert tmp_path not in resolved.parents
+
+
+def test_a_relative_override_is_still_anchored_to_the_repo() -> None:
+    batch = _batch()
+    assert batch.transcripts_dir("elsewhere", "config.yaml") == batch.REPO / "elsewhere"
+
+
+def test_an_absolute_override_is_left_alone(tmp_path) -> None:
+    batch = _batch()
+    assert batch.transcripts_dir(str(tmp_path), "config.yaml") == tmp_path
+
+
+def test_the_newest_session_is_found_when_the_diff_is_empty(tmp_path) -> None:
+    """A resumed session appends to an existing file, so nothing is created and
+    the before/after diff is legitimately empty."""
+    batch = _batch()
+    started = time.time()
+    old = tmp_path / "net-old.jsonl"
+    old.write_text("{}\n")
+    import os
+
+    stale = started - 3600
+    os.utime(old, (stale, stale))
+    current = tmp_path / "net-current.jsonl"
+    current.write_text("{}\n")
+
+    assert batch._newest_session_since(tmp_path, started) == "net-current.jsonl"
+    assert batch._newest_session_since(tmp_path, time.time() + 60) == ""

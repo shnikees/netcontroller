@@ -89,6 +89,52 @@ def sessions_in(directory: Path) -> set[str]:
     return {p.name for p in directory.glob("net-*.jsonl")}
 
 
+def transcripts_dir(override: str | None, config_path: str) -> Path:
+    """Where `app.py` will actually write, not where we happen to be standing.
+
+    This was a bug worth spelling out. The directory used to be
+    `Path(args.transcripts)` -- relative to *this tool's* working directory --
+    while `app.py` runs with `cwd=REPO` and writes relative to that. Launched
+    from anywhere else (a scheduled task, a cron entry, another folder) the two
+    disagreed, the before/after diff came back empty, and every recording was
+    filed with an empty session name. A later cleanup trusted those empty names
+    and deleted the very transcripts it was meant to protect.
+
+    So the path is resolved the way the app resolves it: from the config when
+    there is one, and always anchored to the repository rather than to $PWD.
+    """
+    if override:
+        chosen = Path(override)
+        return chosen if chosen.is_absolute() else REPO / chosen
+
+    configured = "transcripts"
+    try:
+        sys.path.insert(0, str(REPO))
+        from config import load_config
+
+        configured = load_config(config_path).transcripts.dir or configured
+    except Exception:
+        pass  # no config, or an unreadable one: the app's default applies
+
+    chosen = Path(configured)
+    return chosen if chosen.is_absolute() else REPO / chosen
+
+
+def _newest_session_since(directory: Path, started: float) -> str:
+    """Fallback when the before/after diff finds nothing.
+
+    A resumed session appends to an existing file rather than creating one, so
+    the diff is legitimately empty and the newest file touched during the run is
+    the right answer.
+    """
+    if not directory.exists():
+        return ""
+    fresh = [
+        p for p in directory.glob("net-*.jsonl") if p.stat().st_mtime >= started - 1
+    ]
+    return max(fresh, key=lambda p: p.stat().st_mtime).name if fresh else ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -97,7 +143,9 @@ def main() -> int:
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--roster", help="default: roster.csv, or an empty one")
     parser.add_argument("--model", default="base")
-    parser.add_argument("--transcripts", default="transcripts")
+    parser.add_argument(
+        "--transcripts", help="default: from the config, relative to the repo"
+    )
     parser.add_argument(
         "--redo", action="store_true", help="process everything again from scratch"
     )
@@ -107,7 +155,7 @@ def main() -> int:
     recordings = Path(args.recordings).expanduser()
     if not recordings.exists():
         raise SystemExit(f"No such folder: {recordings}")
-    transcripts = Path(args.transcripts)
+    transcripts = transcripts_dir(args.transcripts, args.config)
 
     manifest_path = recordings / MANIFEST
     done: dict = {}
@@ -161,13 +209,20 @@ def main() -> int:
             continue
 
         new = (sessions_in(transcripts) - before) if transcripts.exists() else set()
+        session = sorted(new)[0] if new else _newest_session_since(transcripts, started)
+        if not session:
+            # Never file a recording as done-with-no-session: something
+            # downstream will read that as "delete me".
+            print("WARNING: no session file found -- not recording as done")
+            failed += 1
+            continue
         done[path.name] = {
-            "session": sorted(new)[0] if new else "",
+            "session": session,
             "minutes": round(length / 60, 1),
             "took_seconds": round(time.time() - started, 1),
         }
         manifest_path.write_text(json.dumps(done, indent=2), encoding="utf-8")
-        print(f"{time.time() - started:5.0f}s -> {done[path.name]['session'] or '(no session)'}")
+        print(f"{time.time() - started:5.0f}s -> {session}")
         processed += 1
 
     if temporary_roster and temporary_roster.exists():
