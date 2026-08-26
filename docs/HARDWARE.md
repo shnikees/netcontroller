@@ -37,6 +37,39 @@ flattering an engine with one long file:
 python tools/bench_engines.py --audio net.wav --roster roster.csv --repeat 5
 ```
 
+## Threads, and why the app was slower than these numbers until 2026-08-26
+
+Every measurement in this file passes `cpu_threads` explicitly -- 8 unless
+stated -- and `whisper.cpp` is always given `-t 8`, so the engine comparisons
+below are like for like.
+
+The app was not. `SttWorker` built its `WhisperModel` with no `cpu_threads` at
+all and took the library default, which in practice keeps about one core busy.
+So anyone reading these figures and then running `app.py` got worse throughput
+than the doc promised, on the same machine. The setting is now
+`whisper.cpu_threads`, still defaulting to 0 -- during a live net the SDR
+software and the dashboard need cores too, and a batch replay can ask for more.
+
+Worth knowing what threads actually buy, because it is much less than the core
+count suggests. On an 8-core Ryzen 7700X, one 75-minute net:
+
+| Threads | Time |
+| --- | --- |
+| library default | 292 s |
+| 16 | 238 s |
+
+That is 18%, and the process was using 0.93 cores throughout -- 73 OS threads,
+222 CPU-seconds over 238 s of wall clock. Beam-search decoding is sequential, so
+a single transcription uses about one core however many it is handed; the
+threads only help the encoder.
+
+**Parallelism comes from processing several recordings at once, not from
+threads.** Four at a time with two threads each did four 75-minute nets in 247 s
+against 238 s for one, close to four times the throughput --
+`tools/batch_process.py --jobs 4`. That does not help a live net, where clips
+arrive one at a time, but it is the difference between a folder of 32 recordings
+taking two hours and taking eight.
+
 ## Biasing is the biggest lever, and half of what it appears to give is fake
 
 Measured 2026-08-17 over 919 transmissions from three live nets, `base`, with
