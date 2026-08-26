@@ -205,6 +205,11 @@ class VoiceConfig:
     what keeping the enrolment audio is for."""
     model_path: str = "models/speaker.onnx"
     """Where the ONNX speaker model lives, when backend is onnx."""
+    mean_normalise: bool = True
+    """Subtract each feature's mean over time before inference, which trained
+    speaker models expect. Leaving it off does not error -- it flattens every
+    embedding until all voices look alike. Only turn it off for a model that
+    normalises internally."""
     path: str = "voices.json"
     """Profiles persist here, so next week's net starts knowing these voices."""
     min_similarity: float = 0.82

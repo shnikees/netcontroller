@@ -177,6 +177,11 @@ voice:
   # is what keeping the enrolment audio is for.
   backend: builtin
   model_path: models/speaker.onnx
+  # Trained speaker models are fed features with the time-mean removed. Without
+  # this a real wespeaker ECAPA export embedded five different clips of net
+  # audio to within 0.013 cosine similarity -- every voice alike, and no error
+  # to say so. With it, 0.159.
+  mean_normalise: true
   path: voices.json
   # How close a voice must be before it is worth suggesting. This is the one
   # number here that synthetic testing cannot set for you -- start high, and

@@ -219,3 +219,58 @@ def test_profiles_rebuild_onto_a_new_backend(tmp_path) -> None:
 
     assert stations == 1 and clips == 3
     assert profiles.profiles["W6ABC"].centroid.shape == (DIMENSIONS,)
+
+
+# --------------------------------------------------------------------------
+# Mean normalisation
+#
+# Found by finally running a real model. A wespeaker ECAPA export loaded
+# cleanly, reported the right dimensions and returned unit vectors -- and
+# embedded five different clips of net audio to within 0.013 of each other.
+# Every voice looked like every other voice, and nothing errored.
+# --------------------------------------------------------------------------
+
+
+def test_features_are_mean_normalised_before_inference(tmp_path) -> None:
+    """The model must see features with the time-mean removed."""
+    model = feature_model(tmp_path / "m.onnx", transposed=False, with_length=False)
+    embedder = voice_onnx.OnnxEmbedder(model)
+    embedder.session = _Recorder(embedder.session)
+
+    embedder(np.random.default_rng(0).normal(0, 0.1, 16_000).astype(np.float32))
+
+    fed = embedder.session.last_input
+    assert fed is not None
+    # Mean over the time axis should be ~0 for every feature.
+    means = fed[0].mean(axis=0)
+    assert np.allclose(means, 0.0, atol=1e-4), means[:4]
+
+
+def test_normalisation_can_be_switched_off(tmp_path) -> None:
+    """A model normalising internally would be normalised twice otherwise."""
+    model = feature_model(tmp_path / "m.onnx", transposed=False, with_length=False)
+    embedder = voice_onnx.OnnxEmbedder(model, mean_normalise=False)
+    embedder.session = _Recorder(embedder.session)
+
+    embedder(np.random.default_rng(1).normal(0, 0.1, 16_000).astype(np.float32))
+
+    means = embedder.session.last_input[0].mean(axis=0)
+    assert not np.allclose(means, 0.0, atol=1e-4), "should not have been centred"
+
+
+class _Recorder:
+    """Passes calls through, keeping the array the model was given."""
+
+    def __init__(self, wrapped) -> None:
+        self._wrapped = wrapped
+        self.last_input = None
+
+    def run(self, outputs, feed):
+        self.last_input = next(iter(feed.values()))
+        return self._wrapped.run(outputs, feed)
+
+    def get_inputs(self):
+        return self._wrapped.get_inputs()
+
+    def get_outputs(self):
+        return self._wrapped.get_outputs()

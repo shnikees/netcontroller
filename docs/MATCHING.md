@@ -168,6 +168,28 @@ relayed transmission is somebody else's voice entirely.
 one thing no amount of synthetic testing can set correctly. Start high — a
 suggestion you have to think about is worse than no suggestion.
 
+## Getting an ONNX speaker model
+
+`voice.backend: onnx` needs a model, and the path in the config starts empty
+because a 25 MB download does not belong in the repository. A known-good one:
+
+```bash
+mkdir -p models
+curl -L -o models/speaker.onnx \
+  https://huggingface.co/Wespeaker/wespeaker-ecapa-tdnn512-LM/resolve/main/voxceleb_ECAPA512_LM.onnx
+```
+
+That is wespeaker's ECAPA-TDNN trained on VoxCeleb2 -- 80-dimensional features
+in, a 192-dimensional embedding out. The adapter inspects the model and works
+out how to feed it, so a different export has a fair chance of working without
+a code change.
+
+Check it discriminates before trusting it. Embed a few clips of different
+people and look at the cosine similarities: they should spread over something
+like 0.1-0.2. If every pair comes back above 0.98, the features are wrong
+rather than the voices being alike -- that is what an un-normalised feed looks
+like, and it does not raise an error.
+
 ## Which embedder
 
 Two, chosen with `voice.backend`:

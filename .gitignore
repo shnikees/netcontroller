@@ -15,3 +15,5 @@ transcripts/
 voices.json
 voice_audio/
 .callsign-cache.json
+# Downloaded speaker models: 25 MB each, and fetched not authored.
+models/*.onnx

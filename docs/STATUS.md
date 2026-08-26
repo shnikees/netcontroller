@@ -144,9 +144,13 @@ unverified:
   audio, but with no roster to score against, so the ranking is untested.
 - Any of it on a GPU. CUDA is auto-detected, the status strip reports what it
   resolved to, and none of it has been run against an actual NVIDIA device.
-- The ONNX speaker backend against a *real* model. The adapter is tested
-  against stand-ins for each input convention, but no downloaded ECAPA or
-  TitaNet export has been run through it.
+- ONNX speaker embeddings against *labelled* voices. A real wespeaker ECAPA
+  export now runs through the adapter -- which found a bug worth having: the
+  features were not mean-normalised, and the model embedded five different
+  clips of net audio to within 0.013 cosine similarity. Every voice looked
+  alike, with no error anywhere. Fixed, and the same clips now spread over
+  0.159. What is still untested is whether those embeddings identify the right
+  *person*, which needs clips labelled by who was speaking.
 
 [FIELD-BRINGUP.md](FIELD-BRINGUP.md) is the checklist for closing this gap, in
 an order where each step fails in a way you can diagnose.

@@ -467,7 +467,10 @@ class Pipeline:
             voice_id.set_backend(None)
             return
 
-        embedder = voice_onnx.load(self.config.voice.model_path)
+        embedder = voice_onnx.load(
+            self.config.voice.model_path,
+            mean_normalise=self.config.voice.mean_normalise,
+        )
         voice_id.set_backend(embedder)
         if embedder is not None:
             log.info(
