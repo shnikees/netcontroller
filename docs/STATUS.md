@@ -101,6 +101,15 @@ Six things came out of it that no amount of synthetic audio would have:
 - **Batch mode was silently discarding most of every recording.** A 75-minute
   net came back as 34 lines out of 223 clips and exited successfully. Found
   only because a real recording was long enough for the queue to spill.
+  A second, smaller version of the same bug surfaced on 2026-08-27 while wiring
+  in a faster engine: the backlog check counted the queue and the spill but not
+  the clip *being transcribed*, so a run declared itself complete with a clip
+  still decoding. The reported line count was short by one and finishing it fell
+  to the shutdown drain's fixed timeout — the deadline that check exists to
+  avoid. Latent on Whisper, which rarely empties the queue; routine on Parakeet,
+  which does so between clips. The lesson is the one this file keeps recording:
+  making something faster does not reveal new bugs so much as change which
+  existing ones are reachable.
 - **The prefer-unmatched bias holds on real audio.** Of 50 callsign-shaped
   candidates mined, 22 are issued to nobody -- fragments of mangled
   conversation like `I7R` and `B0I`. Every one would be rejected by a roster.
@@ -345,14 +354,39 @@ features:
    and the packing heuristic less pressing than they looked, and Riva's word
    boosting a solution to a problem the engine choice may dissolve.
 
-   What is left to do is the integration, which has not been started:
-   `stt_worker.py` is the only module that knows which engine is in use, and the
-   escalation design means Parakeet can be tried on the hard lines before
-   committing to it for the live ones. Two things to settle while doing it —
-   whether `hotwords`, which is the best-measured Whisper configuration, is
-   worth anything at all on a model that fabricates nothing; and whether
-   Parakeet's silence on unintelligible clips can replace part of
-   `hallucination.py`.
+   **The integration is done, and off by default.** `parakeet_worker.py` drives
+   whisper.cpp's `parakeet-cli`, duck-typed to `SttWorker` so nothing downstream
+   knows which engine ran; `whisper.engine: parakeet` or `--engine parakeet`
+   selects it. Verified end to end on a real recording: word timings, per-token
+   confidence, silence on dead carrier, and a correct `KJ7RAB` match on the
+   clip where biased Whisper matched **KI7RMU** — the wrong station.
+
+   It stays off for two honest reasons. It has not run a live net. And its
+   confidence is a mean per-token probability rather than Whisper's
+   `exp(avg_logprob)`, so the two are not comparable and every threshold
+   calibrated against Whisper — escalation, and whatever `tools/calibrate.py`
+   last wrote — is invalid after switching. Re-deriving those is the next
+   concrete task.
+
+   One cost, measured rather than assumed: `parakeet-cli` has no server mode and
+   no Python binding, so each clip is a subprocess paying ~1.25 s of model
+   loading against ~0.1 s of inference. A 10-second transmission still costs
+   about 1.35 s end to end, comparable to `base` Whisper — wasteful rather than
+   disqualifying. Fixing it means a server mode upstream or `libparakeet` through
+   ctypes, and neither is worth doing before a net.
+
+   Two questions it raised and did not settle: whether `hotwords`, the
+   best-measured Whisper configuration, is worth anything on a model that
+   fabricates nothing; and whether Parakeet's silence on unintelligible clips
+   can replace part of `hallucination.py`.
+
+   **One hazard, left as the operator's call.** Escalation re-transcribes with a
+   roster-biased Whisper and replaces the line whenever the second pass matches
+   and the first did not — which a fabricated callsign satisfies exactly. So
+   `escalation.enabled` together with `engine: parakeet` can undo the reason for
+   switching. `app.py` warns at startup rather than silently redefining
+   escalation, because the targeted nearest-candidate biasing escalation
+   actually uses was never measured on its own.
 
    **This also reopens the buying question, in the good direction.** Parakeet
    under whisper.cpp is CTranslate2-free, and CTranslate2 being CUDA-only is the

@@ -23,6 +23,13 @@ operator turned out to be. It refuses to suggest anything it cannot support
 yet, and says what it is still short of — no number is better than a number
 that looks measured and is not.
 
+**Re-run it after changing `whisper.engine`.** Confidence is not on a common
+scale between engines: faster-whisper reports a duration-weighted
+`exp(avg_logprob)`, Parakeet a mean per-token probability. Both are 0-1 and
+neither is calibrated, so a `min_confidence` derived from one engine's
+transcripts is a meaningless number under the other — and it will not look
+wrong, it will just quietly escalate the incorrect lines.
+
 **Once, from a recording**, for the timing thresholds. Every one of them ships
 as a reasoned guess about how a net sounds; ten minutes of your own traffic
 replaces the guesses with measurements:

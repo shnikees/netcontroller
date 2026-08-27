@@ -94,6 +94,27 @@ split:
   min_segment_ms: 400
 
 whisper:
+  # faster-whisper | parakeet
+  #
+  # Parakeet measured better on real net audio: 31 roster callsigns against
+  # unbiased Whisper's 19 over 1,525 clips from six PSRG nets, at the same wall
+  # clock, fabricating nothing detectable, and staying silent on 60 clips where
+  # Whisper wrote text for dead carrier. See docs/HARDWARE.md.
+  #
+  # It is not the default because it has not yet run a live net, and because it
+  # reports confidence on a different scale -- any escalation or voice threshold
+  # calibrated against Whisper has to be re-derived after switching.
+  #
+  # Parakeet takes no roster bias at all, which is the point rather than a gap:
+  # 87% of the callsigns prompted Whisper reported had no acoustic support from
+  # any unprompted engine. Everything from bias_mode to beam_size below is
+  # faster-whisper only and is ignored by Parakeet.
+  engine: faster-whisper
+  # Only read when engine is parakeet. The binary comes from a whisper.cpp
+  # build; the model from whisper.cpp's models/convert-parakeet-to-ggml.py run
+  # over the .nemo release (2.5 GB in, 1.2 GB out).
+  parakeet_binary: parakeet-cli
+  parakeet_model: ""
   # tiny | base | small | medium | large-v3
   # base is the default: it keeps up on a laptop CPU during a live net.
   # See docs/ACCURACY.md before moving up.

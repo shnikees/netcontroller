@@ -269,6 +269,7 @@ def test_batch_waits_for_a_slow_transcriber_rather_than_a_clock() -> None:
     fake = SimpleNamespace(
         _clips=SimpleNamespace(qsize=lambda: remaining[0]),
         spill=SimpleNamespace(pending=lambda: 0),
+        _in_flight=0,
     )
 
     def work():
@@ -289,8 +290,39 @@ def test_batch_gives_up_only_when_nothing_is_moving() -> None:
     fake = SimpleNamespace(
         _clips=SimpleNamespace(qsize=lambda: 7),
         spill=SimpleNamespace(pending=lambda: 0),
+        _in_flight=0,
     )
     started = time.monotonic()
     left = app_module.Pipeline.drain_backlog(fake, stall_seconds=0.5)
     assert left == 7
     assert time.monotonic() - started < 5
+
+
+def test_batch_waits_for_the_clip_still_being_transcribed() -> None:
+    """A dequeued clip is in neither the queue nor the spill.
+
+    Without counting it, a batch run declared itself complete while the last
+    clip of a recording was still decoding: the reported line count was short
+    by that clip, and finishing it fell to the shutdown drain's fixed timeout --
+    the very deadline drain_backlog exists to avoid. A fast engine makes this
+    the normal case rather than a rare one, because the queue is empty between
+    clips.
+    """
+    import app as app_module
+
+    fake = SimpleNamespace(
+        _clips=SimpleNamespace(qsize=lambda: 0),
+        spill=SimpleNamespace(pending=lambda: 0),
+        _in_flight=1,
+    )
+
+    def finish() -> None:
+        time.sleep(0.3)
+        fake._in_flight = 0
+
+    threading.Thread(target=finish, daemon=True).start()
+    started = time.monotonic()
+    left = app_module.Pipeline.drain_backlog(fake, stall_seconds=5.0)
+
+    assert left == 0
+    assert time.monotonic() - started >= 0.3, "returned before the clip finished"

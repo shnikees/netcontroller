@@ -132,6 +132,24 @@ class SplitConfig:
 
 @dataclass
 class WhisperConfig:
+    engine: str = "faster-whisper"
+    """Which engine turns audio into text: "faster-whisper" or "parakeet".
+
+    Parakeet measured better on real net audio -- 31 roster callsigns against
+    unbiased Whisper's 19 over 1,525 clips, same wall clock, nothing fabricated.
+    It is not the default yet because it has not run a live net, and because
+    switching invalidates any threshold calibrated against Whisper's confidence
+    scale. See parakeet_worker.py and docs/HARDWARE.md.
+
+    Everything below from `bias_mode` to `beam_size` applies to faster-whisper
+    only; Parakeet has no prompt window and no beam search, and ignores them.
+    """
+    parakeet_binary: str = "parakeet-cli"
+    """`parakeet-cli` from a whisper.cpp build. Only read when engine is
+    "parakeet"."""
+    parakeet_model: str = ""
+    """The converted ggml model, from whisper.cpp's
+    models/convert-parakeet-to-ggml.py."""
     model_size: str = "base"
     cpu_threads: int = 0
     """Threads for CPU inference; 0 is the library default. Worth raising for a

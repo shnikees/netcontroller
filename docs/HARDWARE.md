@@ -214,8 +214,49 @@ against 19 is still 31 against 19 and not a precision measurement.
 in the pipeline, and it arrives with an argument against the biasing work rather
 than for it -- an engine that does not need the prompt cannot echo it. It is
 also CTranslate2-free, which removes the CUDA-only constraint that shapes the
-whole buying section below. Nothing has been changed in `stt_worker.py` yet;
-this is a benchmark, not an integration.
+whole buying section below.
+
+### Running it: what the integration costs
+
+`parakeet_worker.py` drives `parakeet-cli`, selected with
+`whisper.engine: parakeet` or `--engine parakeet`. Off by default; see
+docs/STATUS.md for why.
+
+There is no server mode and no Python binding, so each clip is one subprocess:
+
+| | Wall clock |
+| --- | --- |
+| one clip, cold spawn | 1.35 s |
+| 20 clips, one spawn | 3.18 s |
+
+which is about **1.25 s of model loading per clip against 0.1 s of inference**.
+Wasteful, and still fast enough -- a 10-second transmission costs roughly 1.35 s
+end to end, comparable to `base` Whisper on the same laptop and far inside
+realtime. Measured per clip through the adapter: 0.58 s for a 0.7 s clip, 2.13 s
+for a 54 s one.
+
+Two things do not transfer, and both matter before switching a working setup:
+
+- **Confidence is a different scale.** Mean per-token probability, against
+  Whisper's duration-weighted `exp(avg_logprob)`. Both 0-1, both monotonic,
+  neither calibrated, and *not* comparable -- so escalation thresholds and
+  anything `tools/calibrate.py` derived from Whisper transcripts have to be
+  re-derived.
+- **`no_speech_prob` is binary.** The engine returns tokens or nothing, so this
+  is 0.0 or 1.0. That is the honest report of what it can distinguish.
+
+One concrete case from the end-to-end check, on the clip that opens the
+2026-08-16 net:
+
+| Engine | Transcript | Matched |
+| --- | --- | --- |
+| **Parakeet** | "Good afternoon. This is Cammy Kilo Juliet 7, Romeo Alfa Brasso" | **`KJ7RAB`** |
+| Whisper `base` + prompt | "Good afternoon, this is Kevin, KI7RMU Alpha Bravo" | `KI7RMU` |
+
+Same audio, and the biased engine put the wrong station on the log. Note also
+that it named a *prompted* callsign, so nothing downstream could have caught it:
+`hallucination.py` sees one plausible callsign in one plausible sentence, which
+is exactly the case it cannot judge.
 
 ## Measured on real audio, which inverts the result below
 

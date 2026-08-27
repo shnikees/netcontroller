@@ -63,7 +63,9 @@ session at the hardware.
   linked system over the internet (EchoLink/AllStar) — one
   receiver or several, each with its own level, VAD settings and health.
 - **Transcribes** each transmission with Whisper, conditioning the audio and
-  biasing decoding toward the stations most likely to speak.
+  biasing decoding toward the stations most likely to speak. Parakeet TDT is
+  also supported and measured better on real net audio, without needing the
+  bias at all — see [HARDWARE.md](docs/HARDWARE.md).
 - **Identifies** the station: phonetic normalisation, fuzzy roster matching,
   aliases learned from corrections, and voice recognition for transmissions
   that carry no callsign at all. It refuses to guess rather than log a wrong

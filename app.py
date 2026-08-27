@@ -75,6 +75,43 @@ from voice_id import EnrolmentAudio, VoiceProfiles
 log = logging.getLogger("net-stt")
 
 
+def build_engine(config):
+    """The transcription engine named by the config.
+
+    Both engines are duck-typed to the same interface -- `load`, `reload`,
+    `build_bias`, `transcribe` -- so nothing downstream of here knows which is
+    running. Parakeet is imported lazily because it drags in nothing but the
+    standard library and should not be a hard dependency either way.
+    """
+    if config.whisper.engine == "parakeet":
+        from parakeet_worker import ParakeetWorker
+
+        return ParakeetWorker(
+            binary=config.whisper.parakeet_binary,
+            model=config.whisper.parakeet_model,
+            cpu_threads=config.whisper.cpu_threads,
+            condition_audio=config.whisper.condition_audio,
+            language=config.whisper.language,
+            use_gpu=config.whisper.device != "cpu",
+        )
+    if config.whisper.engine != "faster-whisper":
+        raise SystemExit(
+            f"Unknown whisper.engine {config.whisper.engine!r}. "
+            'Use "faster-whisper" or "parakeet".'
+        )
+    return SttWorker(
+        model_size=config.whisper.model_size,
+        bias_mode=config.whisper.bias_mode,
+        cpu_threads=config.whisper.cpu_threads,
+        device=config.whisper.device,
+        compute_type=config.whisper.compute_type,
+        beam_size=config.whisper.beam_size,
+        language=config.whisper.language,
+        condition_audio=config.whisper.condition_audio,
+        prompt_token_budget=config.whisper.prompt_token_budget,
+    )
+
+
 def _segment_audio(clip, segment):
     """The slice of clip audio belonging to one segment.
 
@@ -334,6 +371,14 @@ class Pipeline:
         self._stt_thread: threading.Thread | None = None
         self._sequence = 0
         self._sequence_lock = threading.Lock()
+        self._in_flight = 0
+        """Clips dequeued and being transcribed right now.
+
+        Counted because a clip in flight is in neither the queue nor the spill,
+        so a backlog check that looks only at those two declares victory while
+        the last clip of a net is still decoding. Written only by the
+        transcription thread, read by the batch finisher; an int is enough and a
+        lock would not make the read any more current than it already is."""
         self._session_start = datetime.now()
 
         # Bounded on purpose. Past this depth the backlog goes to disk, where it
@@ -348,17 +393,7 @@ class Pipeline:
             config.buffering.spill_dir, max_clips=config.buffering.spill_max_clips
         )
 
-        self.stt = SttWorker(
-            model_size=config.whisper.model_size,
-            bias_mode=config.whisper.bias_mode,
-            cpu_threads=config.whisper.cpu_threads,
-            device=config.whisper.device,
-            compute_type=config.whisper.compute_type,
-            beam_size=config.whisper.beam_size,
-            language=config.whisper.language,
-            condition_audio=config.whisper.condition_audio,
-            prompt_token_budget=config.whisper.prompt_token_budget,
-        )
+        self.stt = build_engine(config)
         # A second, larger model for clips the first pass could not resolve.
         # Loaded lazily: it is real memory, and a net may never need it.
         self._escalator: SttWorker | None = None
@@ -413,6 +448,22 @@ class Pipeline:
 
     def start(self) -> None:
         self.stt.load()
+        if self.config.whisper.engine == "parakeet" and self.config.escalation.enabled:
+            # Worth saying out loud rather than quietly redefining. Escalation
+            # replaces a line whenever the second pass matches and the first did
+            # not -- and a fabricated callsign from a biased Whisper satisfies
+            # that test exactly. Measured on 1,525 clips, 87% of prompted
+            # Whisper's callsigns had no acoustic support at all
+            # (tools/cross_check.py), so this pairing can undo the main reason
+            # for running Parakeet in the first place. Left as the operator's
+            # call because targeted nearest-candidate biasing, which is what
+            # escalation actually uses, was never measured on its own.
+            log.warning(
+                "escalation.enabled with engine=parakeet: the second pass is a "
+                "roster-biased Whisper, which measured 87%% unsupported "
+                "callsigns. It can overwrite a clean Parakeet line with an "
+                "invented match. Consider escalation.enabled: false."
+            )
         # Read defensively: a different engine may not report these, and
         # swapping the engine is a live possibility.
         self.fleet.note_compute(
@@ -523,11 +574,19 @@ class Pipeline:
         So this waits on *progress* rather than on the clock, and only gives up
         if the backlog has not shrunk for a long while, which means the
         transcriber has died rather than that it is slow.
+
+        The clip *in flight* counts as backlog. Leaving it out meant the last
+        clip of a recording was still decoding when the run declared itself
+        complete: the reported line count was short by that clip, and finishing
+        it was left to the shutdown drain's fixed timeout, which is exactly the
+        kind of deadline this method exists to avoid. A fast engine makes it
+        routine rather than rare -- Parakeet empties the queue between clips,
+        where Whisper rarely does.
         """
         previous = None
         last_change = time.monotonic()
         while True:
-            pending = self._clips.qsize() + self.spill.pending()
+            pending = self._clips.qsize() + self.spill.pending() + self._in_flight
             if pending == 0:
                 return 0
             if pending != previous:
@@ -590,12 +649,17 @@ class Pipeline:
         try:
             self.stt.reload(pending)
             self._prompts.clear()  # rebuilt against the new tokenizer
+            # Report what the worker actually ended up running, not what was
+            # asked for. An engine entitled to decline a size change -- Parakeet
+            # ships one model -- would otherwise leave the dashboard naming a
+            # model that is not loaded.
+            now = getattr(self.stt, "model_size", pending)
             self.fleet.note_compute(
                 getattr(self.stt, "active_device", ""),
                 getattr(self.stt, "active_compute_type", ""),
-                pending,
+                now,
             )
-            log.info("Live model now %s", pending)
+            log.info("Live model now %s", now)
         except Exception as exc:
             self.fleet.note_error(f"could not load {pending}: {exc}")
             log.exception("Could not switch to %s; keeping the current model", pending)
@@ -902,6 +966,16 @@ class Pipeline:
         return True
 
     def _handle_clip(self, clip, late: bool = False) -> None:
+        self._in_flight += 1
+        try:
+            self._handle_clip_inner(clip, late=late)
+        finally:
+            # In a `finally` because `drain_backlog` waits on this reaching
+            # zero. A clip that raised on its way out must not leave the count
+            # standing, or a batch run would never agree it had finished.
+            self._in_flight -= 1
+
+    def _handle_clip_inner(self, clip, late: bool = False) -> None:
         started_at = self._session_start + timedelta(milliseconds=clip.start_offset_ms)
         health = self.fleet.monitor(clip.source or self.sources[0].name)
         health.note_clip()
@@ -1109,6 +1183,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--roster", help="override the roster CSV path")
     parser.add_argument("--port", type=int, help="override the web server port")
     parser.add_argument("--model", help="override the Whisper model size")
+    parser.add_argument(
+        "--engine",
+        choices=["faster-whisper", "parakeet"],
+        help="override the transcription engine. Parakeet needs "
+        "whisper.parakeet_model set, takes no roster bias, and measured better "
+        "on real net audio; see docs/HARDWARE.md",
+    )
     parser.add_argument(
         "--session-name",
         help="name the session file instead of using a timestamp; for batch "
@@ -1348,6 +1429,8 @@ def main(argv: list[str] | None = None) -> int:
         config.server.port = args.port
     if args.model:
         config.whisper.model_size = args.model
+    if args.engine:
+        config.whisper.engine = args.engine
     if args.cpu_threads is not None:
         config.whisper.cpu_threads = args.cpu_threads
 
