@@ -99,6 +99,26 @@ labelling it needs. Use `--repeat 5` and read the median: run-to-run spread on
 a laptop is around ten percent, enough to reverse a ranking by itself. Results
 so far are in [HARDWARE.md](HARDWARE.md).
 
+### Checking whether a recovered callsign was really there
+
+Recovery counts alone will rank a fabricating engine first. `tools/cross_check.py`
+compares transcripts of *identical clips* from a biased engine and one or more
+unbiased ones, and reports how much of the biased engine's callsign output has
+any acoustic support:
+
+```bash
+python tools/cross_check.py --suspect wh-prompt --against pk-txt wh-plain
+```
+
+Each argument is a directory of one `.txt` per clip, named the same across
+directories -- what `whisper-cli -otxt` and `parakeet-cli -otxt` write. On 1,525
+real clips this found 87% of prompted-Whisper's callsigns unsupported.
+
+Use it when a configuration's numbers look too good. It is one-sided evidence --
+two engines can miss the same faint callsign, so unsupported means unconfirmed
+rather than disproven -- and it costs a second transcription pass, so it is an
+analysis tool rather than something the live path could use.
+
 ## Properties, for the misses that have not happened yet
 
 `test_matcher_properties.py` is the other half of the regression block below.

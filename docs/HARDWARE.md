@@ -109,6 +109,114 @@ Caveats worth keeping attached: one model, one roster of three callsigns, and
 discarding nothing is reassuring -- with no bias terms there is nothing to
 echo -- but it is not proof the detector is right.
 
+## A transducer model beats Whisper on real audio, and invents nothing
+
+Measured 2026-08-26 on 1,525 clips -- 307.8 minutes of speech from six recorded
+PSRG nets, segmented by the app's own VAD. Three engines over the identical
+clips: **Parakeet TDT 0.6b**, and `base` Whisper with and without the roster in
+the prompt. Both run under whisper.cpp with Metal on an M-series laptop, so the
+timings are comparable to each other and to nothing else in this file.
+
+| Engine | Compute | Realtime | Silent | Roster hits (raw) | Trusted | Discarded |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Parakeet TDT 0.6b** | 306 s | **0.017×** | 60 | 31 | **31** | **0%** |
+| Whisper `base`, no bias | 334 s | 0.018× | 0 | 19 | 19 | 0% |
+| Whisper `base` + prompt | 335 s | 0.018× | 0 | 734 | 156 | 79% |
+
+**Parakeet recovers 63% more callsigns than unbiased Whisper, at the same
+speed, with nothing discarded.** 31 against 19. It is the first change measured
+in this project that improves recovery without buying precision from somewhere
+else.
+
+**It also stays quiet.** 60 clips produced no transcript at all, against
+Whisper's zero. That is not a failure -- those are squelch tails and dead
+carrier, and Whisper's habit of writing *something* for them is where a good
+deal of the fabrication starts. Refusing to guess is the behaviour the whole
+matcher is built around, and this model does it at the acoustic layer.
+
+**Repetition tells the two apart more sharply than any accuracy count.**
+Counting every callsign-shaped string, not just roster ones:
+
+| Engine | Clips with a callsign | Distinct | Total | Repetition |
+| --- | --- | --- | --- | --- |
+| Parakeet | 278 | 181 | 311 | 1.7× |
+| Whisper, no bias | 157 | 150 | 185 | 1.2× |
+| Whisper + prompt | 496 | 144 | 1,065 | **7.4×** |
+
+Whisper-plus-prompt emits seven callsigns for every distinct one it knows. It is
+not hearing more stations, it is saying the same handful over and over.
+
+### Two fabrication tests that did not work, and one that did
+
+Whisper+prompt's three most frequent outputs were the three prompted callsigns,
+followed by `KJ7RMU` and `KI7RAB` -- which look exactly like recombinations of
+them (`KJ7`+`RMU`, `KI7`+`RAB`). Two obvious ways to prove that failed, and both
+are worth recording so they are not tried again:
+
+- **Licence status proves nothing.** Both are issued. So is `KI7JXM`, the third
+  possible recombination. Sampling 40 random `KJ7`/`KI7`-shaped callsigns,
+  **37 were issued** -- the space is 92% full, so a plausible fabrication is
+  almost always somebody's real callsign. This is a real limit on
+  `mine_roster.py --validate`: dropping unissued candidates removes noise, but
+  surviving the check is close to no evidence at all.
+- **Geography proves nothing either, on this net.** The two sit in Oregon while
+  the confirmed three are Puget Sound, which looked like a discriminator until
+  the obvious objection: PSRG is linked and effectively global, so an Oregon or
+  Idaho check-in is entirely ordinary. `mine_roster.py` already refuses to count
+  distance against a candidate for this exact reason, and that decision is
+  correct. Do not add a distance filter.
+
+What does work is **cross-engine agreement on the same clip.** An echo of the
+prompt has no acoustic support, so the engines that were never told the
+callsigns will not go near it. For each callsign whisper+prompt reported, ask
+whether the matcher can find that callsign in Parakeet's or unbiased Whisper's
+transcript of *the same clip*:
+
+    whisper+prompt callsign extractions:  876
+      found in an unprompted transcript:  110  (13%)
+      no support from either engine:      766  (87%)
+
+**87% of what prompting appears to recover has no acoustic support whatsoever.**
+The clips make it plain:
+
+| Clip | whisper+prompt | Parakeet | Whisper, no bias |
+| --- | --- | --- | --- |
+| `c0016` | "Welcome to KJ7RAB, KJ7JXM, KI7RMU." | "Around the" | "around the" |
+| `c0008` | "With KI7RAB, KJ7RAB, KJ7JXM." | "Whiskey Seven Oscar Hotel." | "with these seven-hats, go tell." |
+
+And where a callsign was really said, the unprompted engines get it:
+
+| Clip | Parakeet | Whisper, no bias |
+| --- | --- | --- |
+| `c0003` | "This is Cammy Kilo Juliet 7, Romeo Alpha Bravo" | "This is Kevin Erojoli at 7 Romeo Alfa Bravo" |
+
+Note that Parakeet spells it out phonetically and the normalizer collapses it to
+`KJ7RAB` correctly, unchanged. A first version of this test used a regex for
+already-collapsed callsigns and reported 4% support instead of 13%, because it
+could not see that line -- the matcher has to do the judging, not a pattern.
+
+**A gap this exposes in `hallucination.py`.** It catches multi-callsign echo,
+which is why 79% of whisper+prompt's raw hits are discarded above. It cannot
+catch a *single* fabricated callsign in an otherwise plausible sentence, because
+nothing in one clip distinguishes that from a real check-in. So the 156
+"trusted" figure is still an overcount. Cross-engine agreement is the only
+technique measured here that addresses it, and it costs a second transcription
+pass.
+
+**What this does and does not settle.** Six recordings, one net, three confirmed
+callsigns, no ground truth for how many times those stations actually
+identified -- so this is relative recovery again, not recall. The corpus is
+larger than anything else in this file by an order of magnitude, and the
+fabrication result does not depend on knowing the roster, but Parakeet's 31
+against 19 is still 31 against 19 and not a precision measurement.
+
+**What to do with this:** Parakeet is the strongest candidate to replace Whisper
+in the pipeline, and it arrives with an argument against the biasing work rather
+than for it -- an engine that does not need the prompt cannot echo it. It is
+also CTranslate2-free, which removes the CUDA-only constraint that shapes the
+whole buying section below. Nothing has been changed in `stt_worker.py` yet;
+this is a benchmark, not an integration.
+
 ## Measured on real audio, which inverts the result below
 
 Everything in the next section is synthetic speech. On 2026-08-16 the same

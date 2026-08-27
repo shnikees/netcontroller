@@ -118,6 +118,23 @@ Six things came out of it that no amount of synthetic audio would have:
   across four hours; with them, 16 in twenty-four minutes. The token budgeting
   in `stt_worker.py` is doing more work than any model upgrade on offer.
 
+A seventh, from a much larger run on 2026-08-26 -- 1,525 clips, 307.8 minutes of
+speech from six of those nets, three engines over identical audio:
+
+- **Most of what the prompt appears to recover is not there.** For each callsign
+  Whisper-plus-prompt reported, the same clip was checked against two engines
+  that were never told the roster. **87% had no support from either.** Clips
+  where Parakeet and unbiased Whisper both heard "around the" came back from the
+  prompted model as "Welcome to KJ7RAB, KJ7JXM, KI7RMU." This does not overturn
+  the item above -- biasing genuinely helps on clips that carry a callsign -- but
+  it caps how much of that gain is real, and `hallucination.py` only catches the
+  cases where several callsigns arrive at once. A single fabricated callsign in a
+  plausible sentence still gets through.
+- **A different architecture beats it outright.** Parakeet TDT 0.6b, needing no
+  prompt at all, recovered 31 against unbiased Whisper's 19 at the same wall
+  clock, and fabricated nothing detectable. Details in
+  [HARDWARE.md](HARDWARE.md); integration is item 2 below.
+
 What it still has *not* shown is recall. Three confirmed callsigns is enough to
 compare models against each other, but nobody has counted how many times those
 stations actually identified, so "16 recovered" has no denominator. The cheapest
@@ -236,8 +253,11 @@ than a guess.
 | `tools/make_test_audio.py` | Nothing | Synthetic net audio, for exercising the pipeline with no radio |
 | `tools/mine_roster.py` | Nets already recorded | A *draft* roster, ranked by how many separate sessions each callsign appears on, optionally checked against a licence database. Proposes; never adopts |
 | `tools/bench_engines.py` | A recording, and optionally a second engine | Realtime factor and callsign recovery per engine, on real clip-sized workloads — the measurement that should precede buying anything |
+| `tools/cross_check.py` | The same clips transcribed by a biased and an unbiased engine | How much of a biased engine's callsign output has acoustic support from an engine that was never told the roster. The only measured way to catch a *single* fabricated callsign, which `hallucination.py` cannot |
 
-None of them needs hand-labelling: the roster is the supervision throughout.
+None of them needs hand-labelling: the roster is the supervision throughout —
+and `cross_check.py` does not even need that, since one engine's output is the
+supervision for the other's.
 
 ## Off by default, waiting on a decision
 
@@ -302,33 +322,54 @@ features:
    links its repeaters for one on Monday evenings and it is on the same
    stream.
 
-2. **Benchmark alternatives to Whisper.** Promoted in importance by the real-
-   audio result: if a bigger Whisper makes callsign recovery *worse*, then more
-   compute spent on Whisper is not the lever, and the interesting question is
-   whether a different architecture behaves differently on strings that are not
-   language. Parakeet is faster *and* scores better on English, so it buys
-   accuracy and headroom at the same time rather than trading one for the
-   other. Riva adds real *word boosting*, which is a proper answer to the
-   224-token prompt ceiling instead of the packing heuristic in use now — and
-   with 40-100 stations across two frequencies, that ceiling is a live
-   constraint rather than a theoretical one.
+2. **Integrate Parakeet, which is now the measured best engine.** The
+   benchmark this item used to ask for has been run: 2026-08-26, 1,525 clips
+   and 307.8 minutes of speech from six PSRG nets, Parakeet TDT 0.6b against
+   `base` Whisper with and without the roster prompt. Parakeet recovered **31
+   roster callsigns against unbiased Whisper's 19**, at the same wall clock
+   (306 s against 334 s), discarded nothing to the hallucination filter, and
+   stayed silent on 60 clips where Whisper wrote text for dead carrier. Full
+   tables in [HARDWARE.md](HARDWARE.md).
 
-   `stt_worker.py` is the only module that knows which engine is in use, and
-   the escalation design means a second engine can be tried on the hard lines
-   before committing to it for the live ones.
+   The prediction that motivated the item held: a transducer with a weak
+   internal language model does better on strings that are not language. The
+   trend that made bigger Whisper models worse is a language-model effect, and
+   changing architecture inverts it rather than continuing it.
 
-   **Worth doing before buying hardware, not after**, since the engine decides
-   which accelerators are candidates at all — CTranslate2 being CUDA-only is
-   the whole reason the buying list is NVIDIA. Measured comparison, the
-   accelerators a Vulkan-capable engine would unlock, and the buying argument
-   are in [HARDWARE.md](HARDWARE.md).
+   It arrives with a second result that cuts the other way from the biasing
+   work. On the same corpus, **87% of the callsigns Whisper-plus-prompt reported
+   have no acoustic support** from either unprompted engine on the same clip —
+   measured by asking whether the matcher can find the claimed callsign in
+   Parakeet's or unbiased Whisper's transcript of that clip. An engine that does
+   not need the prompt cannot echo it, which makes the 224-token prompt ceiling
+   and the packing heuristic less pressing than they looked, and Riva's word
+   boosting a solution to a problem the engine choice may dissolve.
 
-   Two findings from that benchmark belong here rather than there. `small`
-   scored *worse* than `base` at callsign recovery in every engine
-   configuration, which makes the current `escalation.model_size` default of
-   `small` the worst available choice if a real net reproduces it. And a build
-   of whisper.cpp ships a `parakeet-cli`, so the Parakeet half of this item can
-   be tested through the same binary rather than a second stack.
+   What is left to do is the integration, which has not been started:
+   `stt_worker.py` is the only module that knows which engine is in use, and the
+   escalation design means Parakeet can be tried on the hard lines before
+   committing to it for the live ones. Two things to settle while doing it —
+   whether `hotwords`, which is the best-measured Whisper configuration, is
+   worth anything at all on a model that fabricates nothing; and whether
+   Parakeet's silence on unintelligible clips can replace part of
+   `hallucination.py`.
+
+   **This also reopens the buying question, in the good direction.** Parakeet
+   under whisper.cpp is CTranslate2-free, and CTranslate2 being CUDA-only is the
+   entire reason the buying list is NVIDIA. A Vulkan-capable engine puts AMD and
+   Intel back on the table; see "What a different engine would unlock" in
+   [HARDWARE.md](HARDWARE.md). Still worth settling before spending anything.
+
+   One older finding from the same benchmark work belongs here rather than
+   there: `small` scored *worse* than `base` at callsign recovery in every
+   engine configuration, which makes the current `escalation.model_size` default
+   of `small` the worst available choice if a real net reproduces it.
+
+   Two fabrication tests that failed are recorded in
+   [HARDWARE.md](HARDWARE.md) so they are not retried — licence status is
+   near-worthless as evidence (92% of plausible `KJ7`/`KI7`-shaped callsigns are
+   issued), and distance from the repeater is meaningless on a linked net like
+   PSRG, which is effectively global.
 
 3. **Improve callsign recovery on real audio.** The whole point, and now the
    best-evidenced gap. Ranked by what the real-audio result predicts, not by
@@ -338,7 +379,7 @@ features:
 
    | Candidate | The prediction it tests |
    | --- | --- |
-   | **Parakeet TDT 0.6b** | A transducer with a far weaker internal language model. If "more language model, worse callsigns" is the mechanism, this should *invert* the trend rather than continue it. `whisper.cpp` already builds `parakeet-cli`, so it is one model download away |
+   | ~~**Parakeet TDT 0.6b**~~ | **Measured 2026-08-26, and the prediction held.** 31 roster callsigns against unbiased Whisper's 19 on 1,525 real clips, same wall clock, nothing fabricated. Integration is now item 2 |
    | **`large-v3-turbo`** | Full large encoder, decoder distilled from 32 layers to 4 — strong acoustics, weak language model. The hypothesis predicts it *beats* `medium` despite being nominally bigger, which is a falsifiable claim worth having |
    | **A pure CTC model** (wav2vec2) | No language model at all. The extreme end, which bounds the size of the effect. A one-off experiment rather than a candidate engine, since it drags in torch |
    | `large-v3` | Only to confirm the decline continues. Expensive, and the trend already predicts the answer |
